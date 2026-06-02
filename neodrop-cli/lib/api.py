@@ -50,6 +50,12 @@ def _build_url(api_origin: str, proc: str, input_value: Any = None) -> str:
     return f"{base}?{encoded}"
 
 
+# Cloudflare WAF 看到默认的 "Python-urllib/3.x" UA 会按 bot 拒（HTTP 403 + error
+# code 1010）。给一个老实的客户端身份——告诉 CF/origin「这是 neodrop-cli」，便于
+# 排查与白名单。**改 UA 不是为了伪装**，是为了通过基础的 client fingerprint check。
+USER_AGENT = "neodrop-cli/0.1 (+https://github.com/DeepLangAI/neodrop-skills)"
+
+
 def _do_request(
     *,
     method: str,
@@ -57,7 +63,11 @@ def _do_request(
     token: Optional[str],
     body: Optional[bytes],
 ) -> tuple[int, bytes]:
-    headers = {"content-type": "application/json"}
+    headers = {
+        "content-type": "application/json",
+        "user-agent": USER_AGENT,
+        "accept": "application/json",
+    }
     if token:
         headers["authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
