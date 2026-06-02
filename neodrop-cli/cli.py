@@ -378,16 +378,26 @@ def cmd_api(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    # 共享 flag——argparse 的 subparser 默认不继承父 parser 的 flag，所以
+    # `neodrop whoami --pretty` 会报「unrecognized arguments」。用 parents=[shared]
+    # 让每个 subcommand 都接受 --pretty，AI 不用纠结 `--pretty` 该放哪。
+    shared = argparse.ArgumentParser(add_help=False)
+    shared.add_argument("--pretty", action="store_true", help="缩进 JSON 输出（依然是合法 JSON）")
+
+    def add(parent: Any, name: str, **kwargs: Any) -> argparse.ArgumentParser:
+        """add_parser 包装：自动注入 parents=[shared]，所有 leaf 都接受 --pretty。"""
+        return parent.add_parser(name, parents=[shared], **kwargs)
+
     parser = argparse.ArgumentParser(
         prog="neodrop",
         description="Neodrop CLI — AI agent 与人类共用，stdout = JSON。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        parents=[shared],
     )
-    parser.add_argument("--pretty", action="store_true", help="缩进 JSON 输出（依然是合法 JSON）")
     sub = parser.add_subparsers(dest="cmd", metavar="<command>", required=True)
 
     # login
-    p = sub.add_parser("login", help="浏览器 OAuth-like 授权，把 PAT 写到 ~/.neodrop/credentials.json")
+    p = add(sub, "login", help="浏览器 OAuth-like 授权，把 PAT 写到 ~/.neodrop/credentials.json")
     p.add_argument("--server", default=DEFAULT_SERVER, help=f"web origin（默认 {DEFAULT_SERVER}，NEODROP_SERVER 覆盖）")
     p.add_argument(
         "--api",
@@ -398,32 +408,32 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--port", type=int, default=0, help="本地 callback server 端口（0=随机）")
     p.set_defaults(func=cmd_login)
 
-    sub.add_parser("logout", help="撤销 PAT + 删本地凭证").set_defaults(func=cmd_logout)
-    sub.add_parser("whoami", help="显示当前 token + user 信息").set_defaults(func=cmd_whoami)
-    sub.add_parser("me", help="当前用户信息（user.getMe）").set_defaults(func=cmd_me)
+    add(sub, "logout", help="撤销 PAT + 删本地凭证").set_defaults(func=cmd_logout)
+    add(sub, "whoami", help="显示当前 token + user 信息").set_defaults(func=cmd_whoami)
+    add(sub, "me", help="当前用户信息（user.getMe）").set_defaults(func=cmd_me)
 
     # tokens
-    p = sub.add_parser("tokens", help="管理已签发的 PAT").add_subparsers(dest="sub", required=True)
-    p.add_parser("list", help="列出所有 PAT").set_defaults(func=cmd_tokens_list)
-    pr = p.add_parser("revoke", help="撤销指定 PAT")
+    tokens_sub = add(sub, "tokens", help="管理已签发的 PAT").add_subparsers(dest="sub", required=True)
+    add(tokens_sub, "list", help="列出所有 PAT").set_defaults(func=cmd_tokens_list)
+    pr = add(tokens_sub, "revoke", help="撤销指定 PAT")
     pr.add_argument("id", help="PAT id")
     pr.set_defaults(func=cmd_tokens_revoke)
 
     # channels
-    ch = sub.add_parser("channels", help="频道操作").add_subparsers(dest="sub", required=True)
+    ch = add(sub, "channels", help="频道操作").add_subparsers(dest="sub", required=True)
 
-    pl = ch.add_parser("list", help="列频道：默认公开池；--mine 列我拥有的")
+    pl = add(ch, "list", help="列频道：默认公开池；--mine 列我拥有的")
     pl.add_argument("--mine", action="store_true")
     pl.add_argument("--limit", type=int, default=20)
     pl.add_argument("--cursor", default=None)
     pl.add_argument("--locale", default="en", help="locale 缺省 en，与 Web 默认 locale 一致")
     pl.set_defaults(func=cmd_channels_list)
 
-    pg = ch.add_parser("get", help="单频道详情")
+    pg = add(ch, "get", help="单频道详情")
     pg.add_argument("id")
     pg.set_defaults(func=cmd_channels_get)
 
-    pc = ch.add_parser("create", help="创建频道")
+    pc = add(ch, "create", help="创建频道")
     pc.add_argument("--name", default=None)
     pc.add_argument("--description", default=None)
     pc.add_argument("--type", choices=["PUBLIC", "PRIVATE"], default=None)
@@ -433,24 +443,24 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--stdin", action="store_true", help="从 stdin 读 JSON")
     pc.set_defaults(func=cmd_channels_create)
 
-    ps = ch.add_parser("subscribe", help="订阅频道")
+    ps = add(ch, "subscribe", help="订阅频道")
     ps.add_argument("id", help="channelId")
     ps.set_defaults(func=cmd_channels_subscribe)
 
-    pu = ch.add_parser("unsubscribe", help="取消订阅频道")
+    pu = add(ch, "unsubscribe", help="取消订阅频道")
     pu.add_argument("id", help="channelId")
     pu.set_defaults(func=cmd_channels_unsubscribe)
 
-    psearch = ch.add_parser("search", help="按 query 搜公开频道")
+    psearch = add(ch, "search", help="按 query 搜公开频道")
     psearch.add_argument("query")
     psearch.add_argument("--limit", type=int, default=None)
     psearch.add_argument("--locale", default=None)
     psearch.add_argument("--strict", action="store_true", help="strictLocale=true（locale 必填）")
     psearch.set_defaults(func=cmd_channels_search)
 
-    ch.add_parser("categories", help="全部分类").set_defaults(func=cmd_channels_categories)
+    add(ch, "categories", help="全部分类").set_defaults(func=cmd_channels_categories)
 
-    pbc = ch.add_parser("by-category", help="按分类列频道")
+    pbc = add(ch, "by-category", help="按分类列频道")
     pbc.add_argument("slug")
     pbc.add_argument("--limit", type=int, default=None)
     pbc.add_argument("--cursor", default=None)
@@ -459,9 +469,9 @@ def build_parser() -> argparse.ArgumentParser:
     pbc.set_defaults(func=cmd_channels_by_category)
 
     # grains
-    gr = sub.add_parser("grains", help="grain 内容操作").add_subparsers(dest="sub", required=True)
+    gr = add(sub, "grains", help="grain 内容操作").add_subparsers(dest="sub", required=True)
 
-    gl = gr.add_parser("list", help="列 grain：默认公开 feed；--subscribed 我订阅的；--channel 指定频道")
+    gl = add(gr, "list", help="列 grain：默认公开 feed；--subscribed 我订阅的；--channel 指定频道")
     gl.add_argument("--channel", default=None)
     gl.add_argument("--subscribed", action="store_true")
     gl.add_argument("--limit", type=int, default=20)
@@ -469,11 +479,11 @@ def build_parser() -> argparse.ArgumentParser:
     gl.add_argument("--locale", default=None)
     gl.set_defaults(func=cmd_grains_list)
 
-    gg = gr.add_parser("get", help="单 grain 详情")
+    gg = add(gr, "get", help="单 grain 详情")
     gg.add_argument("id")
     gg.set_defaults(func=cmd_grains_get)
 
-    gs = gr.add_parser("search", help="按 query 搜公开 grain")
+    gs = add(gr, "search", help="按 query 搜公开 grain")
     gs.add_argument("query")
     gs.add_argument("--limit", type=int, default=None)
     gs.add_argument("--locale", default=None)
@@ -481,13 +491,13 @@ def build_parser() -> argparse.ArgumentParser:
     gs.set_defaults(func=cmd_grains_search)
 
     # feed
-    pf = sub.add_parser("feed", help="我订阅的 grain 流（grain.listSubscribed 的简写）")
+    pf = add(sub, "feed", help="我订阅的 grain 流（grain.listSubscribed 的简写）")
     pf.add_argument("--limit", type=int, default=20)
     pf.add_argument("--cursor", default=None)
     pf.set_defaults(func=cmd_feed)
 
     # api 兜底
-    pa = sub.add_parser("api", help="任意 tRPC procedure 直调（糖衣没覆盖时用）")
+    pa = add(sub, "api", help="任意 tRPC procedure 直调（糖衣没覆盖时用）")
     pa.add_argument("procedure", help="如 channel.update / grain.remove")
     g = pa.add_mutually_exclusive_group()
     g.add_argument("--json", default=None)

@@ -70,16 +70,26 @@ def _do_request(
     }
     if token:
         headers["authorization"] = f"Bearer {token}"
-    req = urllib.request.Request(url, data=body, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return resp.status, resp.read()
-    except urllib.error.HTTPError as e:
-        # 非 2xx：仍读 body，tRPC 错误细节在里面
-        return e.code, e.read()
-    except urllib.error.URLError as e:
-        # 网络层错误（连接拒绝、DNS、超时）
-        raise RuntimeError(f"连接失败：{e.reason}") from e
+
+    # 一次 transparent retry——线上 Cloudflare/upstream 偶发 "EOF occurred in
+    # violation of protocol" 等 TLS-layer 抖动；mutation 也加 retry 是因为
+    # tRPC mutation 在网络抖动 + 业务层未提交时是幂等可重的（issue 类除外，
+    # 但 caller 看到错误也会重试，最多多签发一个 PAT/订阅，可接受代价）。
+    last_err: Optional[Exception] = None
+    for _ in range(2):
+        try:
+            req = urllib.request.Request(url, data=body, headers=headers, method=method)
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return resp.status, resp.read()
+        except urllib.error.HTTPError as e:
+            # 非 2xx：仍读 body，tRPC 错误细节在里面——不重试，业务错误重也是错
+            return e.code, e.read()
+        except urllib.error.URLError as e:
+            last_err = e
+            continue
+    # 两次都 fail 才报错
+    reason = getattr(last_err, "reason", last_err)
+    raise RuntimeError(f"连接失败：{reason}") from last_err
 
 
 def _handle_response(status: int, raw: bytes) -> Any:
