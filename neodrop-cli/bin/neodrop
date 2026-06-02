@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Neodrop CLI 本地包装：调用同目录的 cli.py，无需打包、无需 pip install、无需装全局。
+# 用法（从仓库根目录）：
+#   ./skills/neodrop-cli/bin/neodrop <command> [args...]
+#
+# Python 要求：3.9+（用了 PEP 585 / from __future__ 注解；macOS 12+ 自带 3.9+）
+
+set -e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# 优先 python3，回退 python
+if command -v python3 >/dev/null 2>&1; then
+  PY=python3
+elif command -v python >/dev/null 2>&1; then
+  PY=python
+else
+  echo "错误：未找到 python3（neodrop CLI 需要 Python 3.9+）" >&2
+  exit 127
+fi
+
+exec "$PY" "$SCRIPT_DIR/cli.py" "$@"

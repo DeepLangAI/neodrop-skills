@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+venv/
+.venv/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# 本地凭证不入 repo（同时 ~/.neodrop/ 也是用户私有目录，跟仓库无关，但兜底加上）
+credentials.json
