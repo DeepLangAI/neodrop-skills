@@ -383,7 +383,7 @@ def cmd_channels_by_category(args: argparse.Namespace) -> None:
     emit(trpc_query({"apiOrigin": api_origin, "token": token}, "channel.listByCategory", payload))
 
 
-def cmd_grains_list(args: argparse.Namespace) -> None:
+def cmd_posts_list(args: argparse.Namespace) -> None:
     api_origin, token, _ = _authed_ctx()
     if args.subscribed:
         payload: dict = {"limit": args.limit}
@@ -408,12 +408,12 @@ def cmd_grains_list(args: argparse.Namespace) -> None:
     emit(trpc_query({"apiOrigin": api_origin, "token": token}, "grain.listRecent", payload))
 
 
-def cmd_grains_get(args: argparse.Namespace) -> None:
+def cmd_posts_get(args: argparse.Namespace) -> None:
     api_origin, token, _ = _authed_ctx()
     emit(trpc_query({"apiOrigin": api_origin, "token": token}, "grain.getById", {"id": args.id}))
 
 
-def cmd_grains_search(args: argparse.Namespace) -> None:
+def cmd_posts_search(args: argparse.Namespace) -> None:
     api_origin, token, _ = _authed_ctx()
     payload: dict = {"query": args.query}
     if args.limit is not None:
@@ -448,12 +448,12 @@ def _watch_task(
 ) -> dict:
     """轮询 agentTask.getById 直到 status 落到终态或超时。
 
-    每次状态变化或检测到首条 grain 时打 stderr 一行进度——给人类看；
-    AI 只需要在 watch 结束时拿到最终 task 对象（含 channelId / status / grainCount）。
+    每次状态变化或检测到首条内容时打 stderr 一行进度——给人类看；
+    AI 只需要在 watch 结束时拿到最终 task 对象（含 channelId / status / 已产出内容数）。
     """
     deadline = time.monotonic() + timeout_sec
     last_status: Optional[str] = None
-    last_grain_count: int = -1
+    last_post_count: int = -1
 
     while True:
         try:
@@ -469,14 +469,16 @@ def _watch_task(
             time.sleep(poll_interval_sec)
             continue
         status = task.get("status")
-        grain_count = (task.get("channel") or {}).get("_count", {}).get("grains", 0) or 0
+        # 注意：后端 Prisma 模型仍叫 `grains`，这里只是把 CLI 层的人面术语换成
+        # "post / 内容"，字段路径保持与 API 真相源一致，避免读取漂移。
+        post_count = (task.get("channel") or {}).get("_count", {}).get("grains", 0) or 0
 
         if status != last_status:
             note(f"  [{status}] task={task_id}")
             last_status = status
-        if grain_count != last_grain_count and grain_count > 0:
-            note(f"  📰 已产出 {grain_count} 条内容")
-            last_grain_count = grain_count
+        if post_count != last_post_count and post_count > 0:
+            note(f"  📰 已产出 {post_count} 条内容")
+            last_post_count = post_count
 
         if status in _TASK_TERMINAL:
             return task
@@ -668,31 +670,38 @@ def build_parser() -> argparse.ArgumentParser:
     pbc.add_argument("--sort", choices=["latest", "popular"], default=None)
     pbc.set_defaults(func=cmd_channels_by_category)
 
-    # grains
-    gr = add(sub, "grains", help="grain 内容操作").add_subparsers(dest="sub", required=True)
+    # posts —— 单条内容（频道产出的一篇文章 / 一组图文 / 一条音频等）
+    # 历史名 `grains`：保留作 hidden alias，避免老调用方一次性炸——SKILL.md / 用户面
+    # 一律推 `posts`。
+    def register_posts_group(group_name: str, *, visible: bool) -> None:
+        kwargs = {"help": "单条内容操作（频道产出的 post）"} if visible else {}
+        gr = add(sub, group_name, **kwargs).add_subparsers(dest="sub", required=True)
 
-    gl = add(gr, "list", help="列 grain：默认公开 feed；--subscribed 我订阅的；--channel 指定频道")
-    gl.add_argument("--channel", default=None)
-    gl.add_argument("--subscribed", action="store_true")
-    gl.add_argument("--limit", type=int, default=20)
-    gl.add_argument("--cursor", default=None)
-    gl.add_argument("--locale", default=None)
-    gl.set_defaults(func=cmd_grains_list)
+        gl = add(gr, "list", help="列 post：默认公开 feed；--subscribed 我订阅的；--channel 指定频道")
+        gl.add_argument("--channel", default=None)
+        gl.add_argument("--subscribed", action="store_true")
+        gl.add_argument("--limit", type=int, default=20)
+        gl.add_argument("--cursor", default=None)
+        gl.add_argument("--locale", default=None)
+        gl.set_defaults(func=cmd_posts_list)
 
-    gg = add(gr, "get", help="单 grain 详情")
-    gg.add_argument("id")
-    gg.set_defaults(func=cmd_grains_get)
+        gg = add(gr, "get", help="单 post 详情")
+        gg.add_argument("id")
+        gg.set_defaults(func=cmd_posts_get)
 
-    gs = add(gr, "search", help="按 query 搜公开 grain")
-    gs.add_argument("query")
-    gs.add_argument("--limit", type=int, default=None)
-    gs.add_argument("--locale", default=None)
-    gs.add_argument("--strict", action="store_true")
-    gs.set_defaults(func=cmd_grains_search)
+        gs = add(gr, "search", help="按 query 搜公开 post")
+        gs.add_argument("query")
+        gs.add_argument("--limit", type=int, default=None)
+        gs.add_argument("--locale", default=None)
+        gs.add_argument("--strict", action="store_true")
+        gs.set_defaults(func=cmd_posts_search)
+
+    register_posts_group("posts", visible=True)
+    register_posts_group("grains", visible=False)  # 历史 alias，不出现在 --help
 
     # tasks
     tk = add(sub, "tasks", help="Agent 任务（频道创建任务等）").add_subparsers(dest="sub", required=True)
-    tg = add(tk, "get", help="按 id 查任务详情（含 status / channelId / grainCount）")
+    tg = add(tk, "get", help="按 id 查任务详情（含 status / channelId / 已产出内容数）")
     tg.add_argument("id", help="taskId")
     tg.set_defaults(func=cmd_tasks_get)
     tw = add(tk, "watch", help="阻塞轮询任务到终态")
@@ -705,14 +714,14 @@ def build_parser() -> argparse.ArgumentParser:
     tl.set_defaults(func=cmd_tasks_list)
 
     # feed
-    pf = add(sub, "feed", help="我订阅的 grain 流（grain.listSubscribed 的简写）")
+    pf = add(sub, "feed", help="我订阅的内容流（= posts list --subscribed）")
     pf.add_argument("--limit", type=int, default=20)
     pf.add_argument("--cursor", default=None)
     pf.set_defaults(func=cmd_feed)
 
     # api 兜底
     pa = add(sub, "api", help="任意 tRPC procedure 直调（糖衣没覆盖时用）")
-    pa.add_argument("procedure", help="如 channel.update / grain.remove")
+    pa.add_argument("procedure", help="如 channel.update / grain.remove（后端 procedure 名仍走 grain.*）")
     g = pa.add_mutually_exclusive_group()
     g.add_argument("--json", default=None)
     g.add_argument("--stdin", action="store_true")
