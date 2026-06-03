@@ -71,12 +71,16 @@ def _do_request(
     if token:
         headers["authorization"] = f"Bearer {token}"
 
-    # 一次 transparent retry——线上 Cloudflare/upstream 偶发 "EOF occurred in
+    # 多次 transparent retry——线上 Cloudflare/upstream 偶发 "EOF occurred in
     # violation of protocol" 等 TLS-layer 抖动；mutation 也加 retry 是因为
     # tRPC mutation 在网络抖动 + 业务层未提交时是幂等可重的（issue 类除外，
     # 但 caller 看到错误也会重试，最多多签发一个 PAT/订阅，可接受代价）。
+    # 实测大 body 的 agentTask.create 在某些链路上首次失败率高，且 ssl.SSLEOFError
+    # 不一定被包成 URLError——SSLError 是 OSError 子类，这里一并捕获。
+    import ssl  # local import 避免模块顶部依赖膨胀
+
     last_err: Optional[Exception] = None
-    for _ in range(2):
+    for attempt in range(4):
         try:
             req = urllib.request.Request(url, data=body, headers=headers, method=method)
             with urllib.request.urlopen(req, timeout=30) as resp:
@@ -84,10 +88,16 @@ def _do_request(
         except urllib.error.HTTPError as e:
             # 非 2xx：仍读 body，tRPC 错误细节在里面——不重试，业务错误重也是错
             return e.code, e.read()
-        except urllib.error.URLError as e:
+        except (urllib.error.URLError, ssl.SSLError, OSError) as e:
             last_err = e
+            # 简单退避：50ms / 200ms / 500ms
+            backoff = [0.05, 0.2, 0.5, 0.0][min(attempt, 3)]
+            if backoff and attempt < 3:
+                import time as _t
+
+                _t.sleep(backoff)
             continue
-    # 两次都 fail 才报错
+    # 几次都 fail 才报错
     reason = getattr(last_err, "reason", last_err)
     raise RuntimeError(f"连接失败：{reason}") from last_err
 

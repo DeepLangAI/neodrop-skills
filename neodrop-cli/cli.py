@@ -21,6 +21,7 @@ import os
 import platform
 import socket
 import sys
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -259,6 +260,76 @@ def cmd_channels_create(args: argparse.Namespace) -> None:
     emit(trpc_mutation({"apiOrigin": api_origin, "token": token}, "channel.create", input_value))
 
 
+def _parse_config_kv(items: Optional[list[str]]) -> list[dict[str, str]]:
+    """`--config "label=value"` 列表 → agentTask.create 的 config 入参。
+
+    Web onboarding 表单的等价物：每条 {label, value} 会被 creation agent
+    作为 initialUserText 的一部分消费（拼接成 "label: value\\n..."），
+    用来推导 requirement.json 里的 schedule / carrier / whitelist 等。
+    """
+    if not items:
+        return []
+    out: list[dict[str, str]] = []
+    for raw in items:
+        if "=" not in raw:
+            raise SystemExit(
+                f"--config 必须是 label=value 形式，收到：{raw!r}（缺 '='）"
+            )
+        label, value = raw.split("=", 1)
+        label = label.strip()
+        value = value.strip()
+        if not label or not value:
+            raise SystemExit(f"--config 的 label 和 value 都不能为空：{raw!r}")
+        out.append({"label": label, "value": value})
+    return out
+
+
+def cmd_channels_setup(args: argparse.Namespace) -> None:
+    """一键创建 + 激活：调 agentTask.create 启 CHANNEL_CREATION agent。
+
+    后端 procedure 原子地：建 DRAFT 频道 → 建 AI 会话 → 入 BullMQ 任务。
+    creation agent 起来后自己写 requirement.json + 推 ACTIVE，完全不依赖
+    Web 端的 onboarding UI。
+    """
+    api_origin, token, _ = _authed_ctx()
+
+    payload: dict[str, Any] = {
+        "channelName": args.name,
+        "locale": args.locale,
+        "timeZoneOffset": args.timezone,
+    }
+    if args.description:
+        payload["channelDescription"] = args.description
+        payload["description"] = args.description  # creation agent 读这个作为初始 user 消息
+    config_items = _parse_config_kv(args.config)
+    if config_items:
+        payload["config"] = config_items
+    if args.variant:
+        payload["agentChainVariant"] = args.variant
+    if args.connector_grants:
+        payload["connectorGrantIds"] = args.connector_grants
+
+    note(f"⏳ 提交 CHANNEL_CREATION 任务：{args.name}")
+    task = trpc_mutation(
+        {"apiOrigin": api_origin, "token": token},
+        "agentTask.create",
+        payload,
+    )
+
+    task_id = task.get("id")
+    channel_id = task.get("channelId")
+    note(f"✅ 任务已入队：taskId={task_id} channelId={channel_id}")
+    note("   creation agent 后台跑中，会自动写 requirement.json 并推到 ACTIVE。")
+
+    if args.watch:
+        note(f"   --watch 阻塞轮询直到任务终态（超时 {args.timeout}s）...")
+        final = _watch_task(api_origin, token, task_id, timeout_sec=args.timeout)
+        emit({"task": final, "channelId": channel_id})
+        return
+
+    emit({"task": task, "channelId": channel_id, "taskId": task_id})
+
+
 def cmd_channels_subscribe(args: argparse.Namespace) -> None:
     api_origin, token, _ = _authed_ctx()
     emit(
@@ -362,6 +433,80 @@ def cmd_feed(args: argparse.Namespace) -> None:
     emit(trpc_query({"apiOrigin": api_origin, "token": token}, "grain.listSubscribed", payload))
 
 
+# ---- Agent 任务 -------------------------------------------------------
+
+_TASK_TERMINAL = {"COMPLETED", "FAILED", "CANCELLED"}
+
+
+def _watch_task(
+    api_origin: str,
+    token: str,
+    task_id: str,
+    *,
+    timeout_sec: int = 600,
+    poll_interval_sec: float = 3.0,
+) -> dict:
+    """轮询 agentTask.getById 直到 status 落到终态或超时。
+
+    每次状态变化或检测到首条 grain 时打 stderr 一行进度——给人类看；
+    AI 只需要在 watch 结束时拿到最终 task 对象（含 channelId / status / grainCount）。
+    """
+    deadline = time.monotonic() + timeout_sec
+    last_status: Optional[str] = None
+    last_grain_count: int = -1
+
+    while True:
+        try:
+            task = trpc_query(
+                {"apiOrigin": api_origin, "token": token},
+                "agentTask.getById",
+                {"id": task_id},
+            )
+        except Exception as e:  # noqa: BLE001 — 轮询期 TLS / 网络抖动忽略，等下一轮
+            note(f"  ⚠ 轮询异常忽略：{e}")
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(poll_interval_sec)
+            continue
+        status = task.get("status")
+        grain_count = (task.get("channel") or {}).get("_count", {}).get("grains", 0) or 0
+
+        if status != last_status:
+            note(f"  [{status}] task={task_id}")
+            last_status = status
+        if grain_count != last_grain_count and grain_count > 0:
+            note(f"  📰 已产出 {grain_count} 条内容")
+            last_grain_count = grain_count
+
+        if status in _TASK_TERMINAL:
+            return task
+
+        if time.monotonic() >= deadline:
+            note(f"⚠ 轮询超时（{timeout_sec}s）；任务仍在跑，可后续 `tasks get {task_id}`")
+            return task
+
+        time.sleep(poll_interval_sec)
+
+
+def cmd_tasks_get(args: argparse.Namespace) -> None:
+    api_origin, token, _ = _authed_ctx()
+    emit(trpc_query({"apiOrigin": api_origin, "token": token}, "agentTask.getById", {"id": args.id}))
+
+
+def cmd_tasks_watch(args: argparse.Namespace) -> None:
+    api_origin, token, _ = _authed_ctx()
+    final = _watch_task(api_origin, token, args.id, timeout_sec=args.timeout)
+    emit(final)
+
+
+def cmd_tasks_list(args: argparse.Namespace) -> None:
+    api_origin, token, _ = _authed_ctx()
+    payload: dict[str, Any] = {"limit": args.limit}
+    if args.cursor:
+        payload["cursor"] = args.cursor
+    emit(trpc_query({"apiOrigin": api_origin, "token": token}, "agentTask.list", payload))
+
+
 # ---- 兜底通道 ---------------------------------------------------------
 
 
@@ -433,7 +578,11 @@ def build_parser() -> argparse.ArgumentParser:
     pg.add_argument("id")
     pg.set_defaults(func=cmd_channels_get)
 
-    pc = add(ch, "create", help="创建频道")
+    pc = add(
+        ch,
+        "create",
+        help="【低层】只建 DRAFT 空壳频道（无 schedule / carrier / requirement），日常用 setup",
+    )
     pc.add_argument("--name", default=None)
     pc.add_argument("--description", default=None)
     pc.add_argument("--type", choices=["PUBLIC", "PRIVATE"], default=None)
@@ -442,6 +591,57 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--json", default=None, help="原始 JSON 输入（复杂场景）")
     g.add_argument("--stdin", action="store_true", help="从 stdin 读 JSON")
     pc.set_defaults(func=cmd_channels_create)
+
+    pset = add(
+        ch,
+        "setup",
+        help="【推荐】一键创建并激活：起 CHANNEL_CREATION agent 自动写配置 + 推 ACTIVE，无需 Web",
+    )
+    pset.add_argument("--name", required=True, help="频道名（必填）")
+    pset.add_argument(
+        "--description",
+        default=None,
+        help="自然语言完整需求描述；作为 agent 初始 user 消息消费（推荐填）",
+    )
+    pset.add_argument("--locale", default="zh-cn", help="频道 locale，缺省 zh-cn")
+    pset.add_argument(
+        "--timezone",
+        type=int,
+        default=8,
+        help="时区小时偏移（-12 到 14，缺省 8 = 东八区）",
+    )
+    pset.add_argument(
+        "--variant",
+        choices=["lite", "standard"],
+        default=None,
+        help="agent chain 模式，缺省后端定（一般 lite）",
+    )
+    pset.add_argument(
+        "--config",
+        action="append",
+        default=None,
+        metavar="LABEL=VALUE",
+        help="表单字段（可多次）；等价于 Web onboarding 的逐项回答，如 --config '推送频率=每天 08:00'",
+    )
+    pset.add_argument(
+        "--connector-grants",
+        action="append",
+        default=None,
+        metavar="CONNECTOR_ID",
+        help="授权新频道访问的 connector id（可多次）",
+    )
+    pset.add_argument(
+        "--watch",
+        action="store_true",
+        help="阻塞轮询任务到终态（COMPLETED / FAILED / CANCELLED）再返回",
+    )
+    pset.add_argument(
+        "--timeout",
+        type=int,
+        default=600,
+        help="--watch 的轮询超时秒数（缺省 600 = 10 分钟）",
+    )
+    pset.set_defaults(func=cmd_channels_setup)
 
     ps = add(ch, "subscribe", help="订阅频道")
     ps.add_argument("id", help="channelId")
@@ -489,6 +689,20 @@ def build_parser() -> argparse.ArgumentParser:
     gs.add_argument("--locale", default=None)
     gs.add_argument("--strict", action="store_true")
     gs.set_defaults(func=cmd_grains_search)
+
+    # tasks
+    tk = add(sub, "tasks", help="Agent 任务（频道创建任务等）").add_subparsers(dest="sub", required=True)
+    tg = add(tk, "get", help="按 id 查任务详情（含 status / channelId / grainCount）")
+    tg.add_argument("id", help="taskId")
+    tg.set_defaults(func=cmd_tasks_get)
+    tw = add(tk, "watch", help="阻塞轮询任务到终态")
+    tw.add_argument("id", help="taskId")
+    tw.add_argument("--timeout", type=int, default=600, help="超时秒数，缺省 600")
+    tw.set_defaults(func=cmd_tasks_watch)
+    tl = add(tk, "list", help="列出我的任务")
+    tl.add_argument("--limit", type=int, default=20)
+    tl.add_argument("--cursor", default=None)
+    tl.set_defaults(func=cmd_tasks_list)
 
     # feed
     pf = add(sub, "feed", help="我订阅的 grain 流（grain.listSubscribed 的简写）")
