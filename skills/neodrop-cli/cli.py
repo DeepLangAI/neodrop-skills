@@ -87,9 +87,10 @@ def cmd_login(args: argparse.Namespace) -> None:
     """统一登录：session polling 模式。
 
     流程：
-      1. startSession 拿到 sessionId + verification URL
+      1. startSession 拿到 sessionId + pollSecret + verification URL
+         （pollSecret 只在本进程内持有，是 poll 领 token 的唯一凭据，不进 URL）
       2. 打印 URL 给用户复制到浏览器（不自动拉起，不开本地 server，无 callback）
-      3. 轮询 pollSession 直到 APPROVED / DENIED / EXPIRED
+      3. 带 pollSecret 轮询 pollSession 直到 APPROVED / DENIED / EXPIRED
       4. 拿到 token 写入 ~/.neodrop/credentials.json
 
     适用场景：
@@ -116,6 +117,9 @@ def cmd_login(args: argparse.Namespace) -> None:
         {"clientName": client_name, "webOrigin": web_origin},
     )
     session_id: str = session_info["sessionId"]
+    # pollSecret 是后端只下发给本 CLI 进程的私有领取凭据，不进 verification URL；
+    # poll 时必须回传它才能领到 token。URL 里只有 session_id，截图/转发泄漏也领不走 token。
+    poll_secret: str = session_info["pollSecret"]
     verification_url: str = session_info["verificationUrl"]
     poll_interval: float = max(1.0, float(session_info.get("pollIntervalSeconds") or 2))
 
@@ -140,7 +144,7 @@ def cmd_login(args: argparse.Namespace) -> None:
             res = trpc_query(
                 {"apiOrigin": api_origin, "token": None},
                 "cliToken.pollSession",
-                {"sessionId": session_id},
+                {"sessionId": session_id, "pollSecret": poll_secret},
             )
         except ApiError as err:
             # NOT_FOUND 一般是 session 已被后端清理；其它错误也直接抛
