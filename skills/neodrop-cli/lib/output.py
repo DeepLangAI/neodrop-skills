@@ -25,5 +25,7 @@ def emit(data: Any) -> None:
     sys.stdout.write(json.dumps(data, indent=indent, ensure_ascii=False) + "\n")
 
 
-def note(msg: str) -> None:
-    sys.stderr.write(msg + "\n")
+def note(msg: str, end: str = "\n") -> None:
+    sys.stderr.write(msg + end)
+    if end != "\n":
+        sys.stderr.flush()

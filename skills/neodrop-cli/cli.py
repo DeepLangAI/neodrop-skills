@@ -28,8 +28,6 @@ from typing import Any, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lib.api import ApiError, trpc_mutation, trpc_query  # noqa: E402
-from lib.browser import open_in_browser  # noqa: E402
-from lib.callback_server import generate_state, start_callback_server  # noqa: E402
 from lib.credentials import (  # noqa: E402
     Credentials,
     clear_credentials,
@@ -85,106 +83,110 @@ def _load_input_from_flags(args: argparse.Namespace) -> Optional[Any]:
 # ---- 元命令 -----------------------------------------------------------
 
 
-def _is_headless_env() -> bool:
-    """探测当前是不是「拉不起浏览器」的环境。
-
-    判据（任一命中即视为 headless）：
-    - 非 macOS / 非 Windows 下 `DISPLAY` 与 `WAYLAND_DISPLAY` 都没设
-    - 在 SSH 远程会话里（`SSH_CONNECTION` 或 `SSH_TTY` 有值）且无 DISPLAY
-    - `NEODROP_HEADLESS=1` 显式声明
-
-    Mac / Windows 默认有 GUI 不判 headless（webbrowser stdlib 在这两个平台
-    几乎总能找到默认浏览器）。
-    """
-    if os.environ.get("NEODROP_HEADLESS") == "1":
-        return True
-    if sys.platform in ("darwin", "win32"):
-        return False
-    has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-    in_ssh = bool(os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"))
-    return (not has_display) or in_ssh
-
-
 def cmd_login(args: argparse.Namespace) -> None:
-    # --import 走完全不同的路径：从 stdin 读凭证 JSON、远端校验、落地
-    if getattr(args, "import_creds", False):
-        _cmd_login_import(args)
-        return
+    """统一登录：session polling 模式。
 
-    web_origin: str = args.server
+    流程：
+      1. startSession 拿到 sessionId + verification URL
+      2. 打印 URL 给用户复制到浏览器（不自动拉起，不开本地 server，无 callback）
+      3. 轮询 pollSession 直到 APPROVED / DENIED / EXPIRED
+      4. 拿到 token 写入 ~/.neodrop/credentials.json
+
+    适用场景：
+      - 本地有浏览器：复制 URL 到本地浏览器打开
+      - SSH / 无 DISPLAY：复制到任意机器（手机、另一台笔记本）的浏览器
+      - 云沙箱 / 容器：同上，URL 跨网络可达，浏览器不需要回连 CLI 机器
+
+    跨机器复用本地登录：直接 scp ~/.neodrop/credentials.json，不需要专门的 import 命令。
+    """
+    import time
+
+    web_origin: str = args.server.rstrip("/")
     # --api 显式 > NEODROP_API env > 启发式推断
     api_origin: str = args.api or ENV_API_OVERRIDE or infer_api_origin(web_origin)
-    name: str = args.name
-    port: int = args.port
-
-    # 决策：是否尝试拉浏览器
-    # - 显式 --no-browser → 不拉
-    # - 否则 headless 自动探测 → 不拉 + 提示
-    # - 其它情况 → 拉
-    headless = _is_headless_env()
-    open_browser = not args.no_browser and not headless
-
-    state = generate_state()
-    handle = start_callback_server(expected_state=state, port=port)
-    auth_url = (
-        f"{web_origin.rstrip('/')}/cli-auth?"
-        + "&".join(
-            [
-                f"callback={_url_encode(handle.url)}",
-                f"state={state}",
-                f"name={_url_encode(name)}",
-            ]
-        )
-    )
+    client_name: str = args.name
 
     note(f"web   = {web_origin}")
     note(f"api   = {api_origin}")
-    note(f"监听   {handle.url}")
-    note("")
-    note("👉 在任意能上网的浏览器打开下面 URL 授权：")
-    note(f"   {auth_url}")
-    note("")
 
-    if open_browser:
-        opened = open_in_browser(auth_url)
-        if not opened:
-            note("⚠ 无法自动拉起浏览器——请手动复制上面的 URL 打开。")
-    elif args.no_browser:
-        note("（--no-browser：不尝试拉起浏览器，等你手动打开 URL 完成授权）")
-    else:
-        note("（检测到 headless 环境：没启浏览器。等你手动打开上面 URL 完成授权；")
-        note("  如果你这台机器和浏览器在不同网络，loopback callback 不可达，请改用 `login --import`，详见 references/auth.md）")
-
-    note(f"等待授权回调（最长 10 分钟）...")
-
-    try:
-        result = handle.await_result(timeout_seconds=600)
-    except Exception:
-        handle.close()
-        raise
-
-    me = trpc_query({"apiOrigin": api_origin, "token": result["token"]}, "user.getMe")
-    tokens = trpc_query({"apiOrigin": api_origin, "token": result["token"]}, "cliToken.list") or []
-    mine = sorted(
-        [t for t in tokens if not t.get("revokedAt")],
-        key=lambda x: x["createdAt"],
-        reverse=True,
+    # 1. 起 session
+    session_info = trpc_mutation(
+        {"apiOrigin": api_origin, "token": None},
+        "cliToken.startSession",
+        {"clientName": client_name, "webOrigin": web_origin},
     )
-    if not mine:
-        raise RuntimeError("授权返回 ok 但 cliToken.list 找不到刚签发的 token，请重试")
-    mine_first = mine[0]
+    session_id: str = session_info["sessionId"]
+    verification_url: str = session_info["verificationUrl"]
+    poll_interval: float = max(1.0, float(session_info.get("pollIntervalSeconds") or 2))
 
+    note("")
+    note("👉 在任意浏览器（手机 / 笔记本 / 同机都行）打开下面 URL 完成授权：")
+    note("")
+    note(f"   {verification_url}")
+    note("")
+    note(f"   客户端名「{client_name}」（在授权页确认是本次启动的 CLI）")
+    note("   授权链接 10 分钟内有效。授权后回到这个终端继续——CLI 会自动检测。")
+    note("")
+
+    # 2. 轮询
+    deadline = time.monotonic() + 10 * 60  # 与后端 session 寿命对齐
+    waited_dots = 0
+    token: Optional[str] = None
+    token_id: Optional[str] = None
+    expires_at: Optional[str] = None
+    while time.monotonic() < deadline:
+        time.sleep(poll_interval)
+        try:
+            res = trpc_query(
+                {"apiOrigin": api_origin, "token": None},
+                "cliToken.pollSession",
+                {"sessionId": session_id},
+            )
+        except ApiError as err:
+            # NOT_FOUND 一般是 session 已被后端清理；其它错误也直接抛
+            raise RuntimeError(f"轮询授权失败：{err}") from err
+
+        status = res.get("status")
+        if status == "APPROVED":
+            if res.get("alreadyClaimed"):
+                raise RuntimeError(
+                    "授权 token 已被领走（极少触发，正常应是本 CLI 自己领）。请重新 `neodrop login`。"
+                )
+            token = res.get("token")
+            token_id = res.get("tokenId")
+            ea = res.get("tokenExpiresAt")
+            expires_at = ea if isinstance(ea, str) else (ea.isoformat() if ea else None)
+            if not token:
+                raise RuntimeError("授权返回 APPROVED 但缺 token；请重新 `neodrop login`")
+            break
+        if status == "DENIED":
+            raise RuntimeError("授权被用户拒绝。如有需要请重新 `neodrop login` 并核对客户端名。")
+        if status == "EXPIRED":
+            raise RuntimeError("授权链接已过期（10 分钟内未授权）。请重新 `neodrop login`。")
+        # 还在 PENDING — 打点进度（每 5 次 poll 一个点，不刷屏）
+        waited_dots += 1
+        if waited_dots % 5 == 0:
+            note(".", end="")
+    else:
+        raise RuntimeError("等待授权超时。请重新 `neodrop login`。")
+
+    note("")
+
+    # 3. 写凭证
     write_credentials(
         {
             "webOrigin": web_origin,
             "apiOrigin": api_origin,
-            "token": result["token"],
-            "tokenId": mine_first["id"],
-            "name": mine_first["name"],
-            "expiresAt": result["expiresAt"],
+            "token": token,
+            "tokenId": token_id or "",
+            "name": client_name,
+            "expiresAt": expires_at or "",
             "createdAt": _dt.datetime.now(_dt.timezone.utc).isoformat(),
         }
     )
+
+    # 4. 校验 + 输出
+    me = trpc_query({"apiOrigin": api_origin, "token": token}, "user.getMe")
     note(f"✅ 登录成功：{me.get('email') or me.get('id') or '<unknown>'}")
     note(f"   credentials = {credentials_path()}")
     emit(
@@ -193,69 +195,9 @@ def cmd_login(args: argparse.Namespace) -> None:
             "webOrigin": web_origin,
             "apiOrigin": api_origin,
             "user": me,
-            "tokenId": mine_first["id"],
-            "tokenName": mine_first["name"],
-            "expiresAt": result["expiresAt"],
-        }
-    )
-
-
-def _url_encode(s: str) -> str:
-    from urllib.parse import quote
-
-    return quote(s, safe="")
-
-
-def _cmd_login_import(_args: argparse.Namespace) -> None:
-    """从 stdin 读凭证 JSON，远端校验通过后落地——用于无浏览器的远程 / 沙箱 agent。
-
-    用法：
-        cat ~/.neodrop/credentials.json | ./bin/neodrop login --import
-        ssh agent './bin/neodrop login --import' < ~/.neodrop/credentials.json
-    """
-    if sys.stdin.isatty():
-        raise RuntimeError(
-            "--import 需要从 stdin 读凭证 JSON；请用管道或重定向：\n"
-            "  cat creds.json | ./bin/neodrop login --import"
-        )
-    raw = sys.stdin.read().strip()
-    if not raw:
-        raise RuntimeError("--import: stdin 是空的，没读到凭证 JSON")
-    try:
-        creds = json.loads(raw)
-    except json.JSONDecodeError as err:
-        raise RuntimeError(f"--import: stdin 不是合法 JSON：{err}") from err
-
-    required = {"webOrigin", "apiOrigin", "token", "tokenId", "name", "expiresAt"}
-    missing = required - set(creds)
-    if missing:
-        raise RuntimeError(f"--import: 凭证 JSON 缺字段 {sorted(missing)}")
-
-    # 远端校验：用导入的 token 调一次 user.getMe，确认 token 有效
-    note(f"web   = {creds['webOrigin']}")
-    note(f"api   = {creds['apiOrigin']}")
-    note("校验导入的 token…")
-    try:
-        me = trpc_query({"apiOrigin": creds["apiOrigin"], "token": creds["token"]}, "user.getMe")
-    except ApiError as err:
-        raise RuntimeError(f"--import: token 校验失败（{err}）；该凭证可能已过期或被撤销") from err
-
-    # createdAt 缺失补当前时间（兼容老版本凭证）
-    if "createdAt" not in creds:
-        creds["createdAt"] = _dt.datetime.now(_dt.timezone.utc).isoformat()
-    write_credentials(creds)
-    note(f"✅ 导入成功：{me.get('email') or me.get('id') or '<unknown>'}")
-    note(f"   credentials = {credentials_path()}")
-    emit(
-        {
-            "ok": True,
-            "imported": True,
-            "webOrigin": creds["webOrigin"],
-            "apiOrigin": creds["apiOrigin"],
-            "user": me,
-            "tokenId": creds["tokenId"],
-            "tokenName": creds["name"],
-            "expiresAt": creds["expiresAt"],
+            "tokenId": token_id,
+            "tokenName": client_name,
+            "expiresAt": expires_at,
         }
     )
 
@@ -502,7 +444,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="cmd", metavar="<command>", required=True)
 
     # login
-    p = add(sub, "login", help="浏览器 OAuth-like 授权，把 PAT 写到 ~/.neodrop/credentials.json")
+    p = add(
+        sub,
+        "login",
+        help="打印授权 URL → 你在任意浏览器同意 → CLI 轮询拿 PAT 写入 ~/.neodrop/credentials.json。不开浏览器、不开本地 server、不回调",
+    )
     p.add_argument("--server", default=DEFAULT_SERVER, help=f"web origin（默认 {DEFAULT_SERVER}，NEODROP_SERVER 覆盖）")
     p.add_argument(
         "--api",
@@ -510,18 +456,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="api origin（不传按 --server 启发式推断：neodrop.ai → api.neodrop.ai；NEODROP_API 覆盖）",
     )
     p.add_argument("--name", default=_detect_client_name(), help="客户端名（授权页显示给用户辨认）")
-    p.add_argument("--port", type=int, default=0, help="本地 callback server 端口（0=随机）")
-    p.add_argument(
-        "--no-browser",
-        action="store_true",
-        help="不尝试拉起浏览器，只打印 URL；适合 SSH / 无 DISPLAY 环境，等用户在另一个浏览器里手动打开",
-    )
-    p.add_argument(
-        "--import",
-        dest="import_creds",
-        action="store_true",
-        help="从 stdin 读凭证 JSON 并校验落地（适合云沙箱 / 无浏览器机器，从另一台已登录机器把 ~/.neodrop/credentials.json 搬过来）",
-    )
     p.set_defaults(func=cmd_login)
 
     add(sub, "logout", help="撤销 PAT + 删本地凭证").set_defaults(func=cmd_logout)

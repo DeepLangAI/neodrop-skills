@@ -1,83 +1,73 @@
 # 登录与凭证（auth）
 
-## 标准流程（有本地浏览器）
+## 唯一登录流程：session polling
 
 ```bash
 ./bin/neodrop login
 ```
 
-发生了什么：
+无 flag、无模式分支。CLI 做这些事：
 
-1. CLI 起一个**只听 127.0.0.1** 的一次性 HTTP server（随机端口）
-2. 拼出 `https://neodrop.ai/cli-auth?callback=http://127.0.0.1:<port>/cb&state=<csrf>&name=<hostname>` 并尝试拉起浏览器
-3. 用户在浏览器里登录态下点「同意」，授权页 redirect 回 `http://127.0.0.1:<port>/cb?token=...&state=...`
-4. CLI 校验 state（防 CSRF）→ 把 PAT 写入 `~/.neodrop/credentials.json`（chmod 0600）
-5. 本地 server 关闭
+1. 调后端 `cliToken.startSession` 创建一次性会话（256bit 随机 sessionId，10 分钟有效）
+2. 打印一条 `https://neodrop.ai/cli-auth?session=<sid>` 的 verification URL 到 stderr
+3. 每 ~2 秒轮询 `cliToken.pollSession` 等用户授权
+4. 用户在任意浏览器打开 URL → 登录态下进入授权页 → 看到 CLI 自报的 `clientName`
+   → **勾选「这是我刚刚启动的 CLI」** → 点同意
+5. CLI 拿到 PAT → 写到 `~/.neodrop/credentials.json` chmod 0600
 
-凭证字段：
+特性：
+
+- **不自动拉浏览器**——只打印 URL，用户自己复制（同机 / 手机 / 另一台机器都可）
+- **不开本地 HTTP server / callback**——CLI 单向轮询后端，浏览器不需要回连 CLI 机器
+- **没有 token 进 URL 或浏览器历史**——明文 token 只在 CLI ↔ 后端的 HTTPS API 调用里
+- **单次领取**——CLI 第一次 poll 拿到 token 时，后端立即抹掉 `plaintextToken` 字段；
+  即使 session id 后续泄漏给坏人，他也 poll 不出 token
+- **session 10 分钟过期**——过期了就重新跑 `login`
+
+## 凭证文件
 
 ```jsonc
+~/.neodrop/credentials.json
 {
   "webOrigin": "https://neodrop.ai",
   "apiOrigin": "https://api.neodrop.ai",
-  "token": "grain_pat_…",          // PAT 明文，仅本机
+  "token": "grain_pat_…",          // PAT 明文，仅本机；权限 0600
   "tokenId": "tok_…",              // 用于 logout / 远程撤销
-  "name": "<hostname>",            // 在 /settings/cli-tokens 里展示的名字
-  "expiresAt": "2026-09-01T…Z",
+  "name": "Claude Code @ macbook",  // 在 /settings/cli-tokens 上展示的客户端名
+  "expiresAt": "2026-09-01T…Z",    // 默认 90 天
   "createdAt": "2026-06-04T…Z"
 }
 ```
 
-## 无头环境（agent / SSH / 容器）
+## 跨机器：scp 凭证文件
 
-### 方案 A：`--no-browser`（同机有浏览器，但拉不起来）
-
-适用：SSH session、`DISPLAY` 没设、`webbrowser.open()` 静默失败的环境，但**这台机器自己**或**同一局域网内**有可访问 `127.0.0.1:<port>` 的浏览器。
+云沙箱 / CI / 远程 agent / 任何无浏览器但能 SSH 的机器：先在本地登一次，然后 scp 过去：
 
 ```bash
-./bin/neodrop login --no-browser
+# 本地（有浏览器，已 login 过）：
+scp ~/.neodrop/credentials.json agent-box:~/.neodrop/credentials.json
+ssh agent-box 'chmod 600 ~/.neodrop/credentials.json && neodrop whoami'
 ```
 
-CLI 只打印授权 URL + 监听端口，**不尝试**调 `webbrowser.open()`。把 URL 复制到任意能上网的浏览器（手机、另一台笔记本均可）打开，授权后 callback 仍走 `http://127.0.0.1:<port>/cb`——所以浏览器机器必须能访问 CLI 机器的 loopback。
+凭证文件本身就是凭证——CLI 没有专门的 `import` 命令，因为 `cp` 就够了。
+**搬走的 PAT 等价于你的登录身份**，传输请走 SSH / 加密通道。无头机器跑完任务可以
+`neodrop logout` 撤销该 token，下次再 scp 一份新的。
 
-> 如果浏览器和 CLI 不在同一台机器、又不在同一局域网（典型云沙箱），方案 A **不可用**，走方案 B。
+## 安全模型
 
-### 方案 B：`--import`（凭证从已登录机器搬过来）
+| 风险 | 防御 |
+|---|---|
+| 别人发你恶意 cli-auth URL 骗同意 | 授权页强制勾选「这是我刚启动的 CLI」+ 显示 `clientName` 让用户人肉辨认 |
+| Session id URL 泄漏后被回放领 token | 单次领取——第一次 poll 后 `plaintextToken` 立即被擦；session 也 10 分钟过期 |
+| PAT 自递归签发新 PAT | `approveSession` 拒 `ctx.sessionId.startsWith('pat:')` 的请求，只放浏览器 session 过 |
+| PAT 文件在本地裸奔 | 写入时 chmod 0600；同 ~/.aws/credentials 等惯例 |
+| startSession 被刷 | 后端 IP 级限流（10 / min） |
+| 跨用户越权 | 后端 procedure 自身的 `where: { userId: ctx.userId }` 守卫 |
 
-适用：完全无浏览器的云沙箱 / CI / 远程 agent。
-
-1. 在本地（有浏览器）机器跑 `./bin/neodrop login` 正常登录
-2. 把生成的凭证传到无头机器：
-
-   ```bash
-   # 本地
-   cat ~/.neodrop/credentials.json | ssh agent-box \
-     'cat > ~/.neodrop/credentials.json && chmod 600 ~/.neodrop/credentials.json'
-   ```
-
-   或者用 CLI 自带的 import：
-
-   ```bash
-   # 无头机器上
-   cat creds.json | ./bin/neodrop login --import
-   # 或 ssh 一行：
-   ssh agent-box './bin/neodrop login --import' < ~/.neodrop/credentials.json
-   ```
-
-3. 在无头机器验证：`./bin/neodrop whoami`
-
-**安全提醒**：搬走的 PAT 等价于你的登录身份，传输请走 SSH / 加密通道。无头机器跑完任务可以 `./bin/neodrop logout` 撤销该 token，下次再 import 一份新的。
-
-### 方案 C：device flow（roadmap）
-
-> 状态：未实现。需要后端加 `cliToken.deviceCode` / `cliToken.devicePoll` 两个 procedure +
-> 一个 `/device` 网页（用户输验证码 → 同意），CLI 这边轮询拿 token。
-> 真正完全无中介的「打开 URL + 输验证码」体验。
-> tracker：见主仓 `docs/neodrop-cli.md` roadmap 节。
+授权页本身**不可信地**显示 CLI 自报的 `clientName`（任何脚本都能写 `--name "Claude Code"`
+骗你）——这就是为什么强制勾选确认的步骤。**用户必须人肉确认** clientName 对得上自己刚跑的命令。
 
 ## 私有部署
-
-如果你跑的是私有 Neodrop 实例：
 
 ```bash
 # 方式 A：环境变量
@@ -87,7 +77,9 @@ NEODROP_SERVER=https://your-neodrop.example.com ./bin/neodrop login
 ./bin/neodrop login --server https://your-neodrop.example.com
 ```
 
-默认 API 域按 web origin 启发式推断（`neodrop.ai` → `api.neodrop.ai`；`localhost:4001` → `localhost:3001`；其他与 web origin 同域）。若 api 域不同传 `--api <url>` 或设 `NEODROP_API`。
+默认 API 域按 web origin 启发式推断（`neodrop.ai` → `api.neodrop.ai`；`localhost:4001`
+→ `localhost:3001`；其他与 web origin 同域）。若 api 域不同传 `--api <url>` 或设
+`NEODROP_API`。
 
 ## 撤销与轮换
 
@@ -95,11 +87,4 @@ NEODROP_SERVER=https://your-neodrop.example.com ./bin/neodrop login
 - 网页撤销：[neodrop.ai/settings/cli-tokens](https://neodrop.ai/settings/cli-tokens)
 - 看自己签发了哪些 PAT：`./bin/neodrop tokens list`
 - 撤销别处的 PAT：`./bin/neodrop tokens revoke <id>`
-- 默认 PAT 有效期 90 天；过期重新 `login` 即可（或 `--import` 一份新的）
-
-## 安全模型
-
-- PAT 永远是**普通用户身份**——admin procedure 在 backend 自身的 `adminProcedure` 守卫里拦
-- callback 只允许 `localhost` / `127.0.0.1` / `[::1]`（防恶意网站构造 callback 偷 token）
-- 明文 token 只在最终 redirect URL 中出现一次，写入文件后 chmod 0600
-- `cliToken.issue` 拒绝以 PAT 自己签发新 PAT（防 PAT 派生链）
+- 默认 PAT 有效期 90 天；过期重新 `login` 即可
