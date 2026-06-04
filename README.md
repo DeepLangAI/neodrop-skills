@@ -4,6 +4,22 @@
 
 本仓库收录所有官方 Neodrop AI skill。当前只有 `neodrop-cli`，将来会有更多。
 
+## 目录约定
+
+每个 skill 在 `skills/<skill-name>/` 一个独立目录，目录名即 skill 名（与 `SKILL.md` frontmatter 的 `name:` 完全一致，遵循 [Anthropic Skill 规范](https://docs.anthropic.com/claude/docs/build-skills)）：
+
+```
+neodrop-skills/
+├── README.md              ← 你在看的这个，面向外部用户的总览
+├── LICENSE                ← MIT
+└── skills/                ← 所有 skill 在这里并列
+    └── neodrop-cli/       ← 第一个 skill（将来可有 neodrop-pm/、neodrop-search/ 等）
+        ├── SKILL.md       ← AI agent skill 描述 + 路由触发词
+        ├── cli.py         ← Python 入口（stdlib only）
+        ├── lib/           ← api / credentials / callback_server / ...
+        └── bin/neodrop    ← bash 包装 → python3 cli.py
+```
+
 ## 装这个 skill 能让 AI 做什么
 
 - **看你的 Neodrop**：你问「我订阅了哪些频道」「我最近订阅频道更新了什么」，AI 直接调命令拿数据回答你
@@ -37,13 +53,13 @@ cd neodrop-skills
 或者把它作为某个项目的 git submodule：
 
 ```bash
-git submodule add https://github.com/DeepLangAI/neodrop-skills.git skills
+git submodule add https://github.com/DeepLangAI/neodrop-skills.git neodrop-skills
 ```
 
 ### 3. 登录（一次）
 
 ```bash
-./neodrop-cli/bin/neodrop login
+./skills/neodrop-cli/bin/neodrop login
 ```
 
 浏览器会自动跳到授权页 → 点「同意」→ 关浏览器即完成。token 写入 `~/.neodrop/credentials.json`（chmod 0600，只有你能读）。
@@ -51,7 +67,7 @@ git submodule add https://github.com/DeepLangAI/neodrop-skills.git skills
 验证：
 
 ```bash
-./neodrop-cli/bin/neodrop whoami --pretty
+./skills/neodrop-cli/bin/neodrop whoami --pretty
 ```
 
 应该看到你的用户信息和 token 元信息的 JSON。
@@ -60,11 +76,10 @@ git submodule add https://github.com/DeepLangAI/neodrop-skills.git skills
 
 #### Claude Code
 
-把 SKILL.md 软链到 Claude Code 的 skill 目录：
+把整个 skill 目录软链到 Claude Code 的 skill 目录（**链整个目录而不是只链 SKILL.md**——这样 `bin/`、`cli.py` 等也一并就位，Claude Code 才能跑命令）。目录名必须与 `SKILL.md` 的 `name: neodrop-cli` 一致：
 
 ```bash
-mkdir -p ~/.claude/skills/neodrop
-ln -sf "$PWD/neodrop-cli/SKILL.md" ~/.claude/skills/neodrop/SKILL.md
+ln -sf "$PWD/skills/neodrop-cli" ~/.claude/skills/neodrop-cli
 ```
 
 重启 Claude Code（或新开一个会话），AI 看到「我订阅了什么频道」之类的提问就会自动调本 skill。
@@ -74,14 +89,14 @@ ln -sf "$PWD/neodrop-cli/SKILL.md" ~/.claude/skills/neodrop/SKILL.md
 ```json
 {
   "permissions": {
-    "allow": ["Bash(./neodrop-cli/bin/neodrop:*)"]
+    "allow": ["Bash(./skills/neodrop-cli/bin/neodrop:*)"]
   }
 }
 ```
 
 #### Cursor
 
-把 SKILL.md 内容复制到 `.cursorrules` 或 Cursor 设置里的 system prompt 末尾，告诉 Cursor「需要操作 Neodrop 时调 `./neodrop-cli/bin/neodrop ...`」。
+把 SKILL.md 内容复制到 `.cursorrules` 或 Cursor 设置里的 system prompt 末尾，告诉 Cursor「需要操作 Neodrop 时调 `./skills/neodrop-cli/bin/neodrop ...`」。
 
 #### 别的 agent
 
@@ -100,7 +115,7 @@ Grain        grains list [--subscribed | --channel <id>] / get <id> / search <q>
 全局         --pretty（缩进 JSON 给人看，但依然是合法 JSON）
 ```
 
-详细用法：`./neodrop-cli/bin/neodrop --help` 或看 [`neodrop-cli/SKILL.md`](neodrop-cli/SKILL.md)。
+详细用法：`./skills/neodrop-cli/bin/neodrop --help` 或看 [`neodrop-cli/SKILL.md`](neodrop-cli/SKILL.md)。
 
 ## 输出契约
 
@@ -121,7 +136,7 @@ CLI 给 AI 设计：
 - token 是明文存在 `~/.neodrop/credentials.json`，文件权限自动设为 `0600`（只有当前用户能读）
 - 同 GitHub PAT / npm token 一样，**请保护好你的 home 目录**——任何能读你 home 目录的进程都能拿到这个 token，等价于你的登录身份
 - 默认 token 90 天过期；可在 [neodrop.ai/settings/cli-tokens](https://neodrop.ai/settings/cli-tokens) 网页随时撤销
-- 本地丢 token：`./neodrop-cli/bin/neodrop logout`（撤销 + 删本地凭证），然后 `login` 重发
+- 本地丢 token：`./skills/neodrop-cli/bin/neodrop logout`（撤销 + 删本地凭证），然后 `login` 重发
 - 担心 token 在文件里裸奔：每次用完都 logout；或定期 `tokens list` 检查并撤销陌生条目
 
 ## 私有部署 / Self-host
@@ -130,10 +145,10 @@ CLI 给 AI 设计：
 
 ```bash
 # 方式 A：环境变量
-NEODROP_SERVER=https://your-neodrop.example.com ./neodrop-cli/bin/neodrop login
+NEODROP_SERVER=https://your-neodrop.example.com ./skills/neodrop-cli/bin/neodrop login
 
 # 方式 B：login flag
-./neodrop-cli/bin/neodrop login --server https://your-neodrop.example.com
+./skills/neodrop-cli/bin/neodrop login --server https://your-neodrop.example.com
 ```
 
 默认 API 域按 web origin 启发式推断：`neodrop.ai` → `api.neodrop.ai`；`localhost:4001` → `localhost:3001`；其他默认与 web origin 同域（假设 backend 反代在 `/trpc/*`）。如果你的 api 域不同，传 `--api <url>` 或设 `NEODROP_API`。
