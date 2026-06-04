@@ -40,6 +40,7 @@ from lib.credentials import (  # noqa: E402
 )
 from lib.origins import infer_api_origin  # noqa: E402
 from lib.output import emit, note, set_pretty  # noqa: E402
+from lib.web_urls import channel_url, post_url, user_url  # noqa: E402
 
 DEFAULT_SERVER = os.environ.get("NEODROP_SERVER", "https://neodrop.ai")
 ENV_API_OVERRIDE = os.environ.get("NEODROP_API")
@@ -218,8 +219,11 @@ def cmd_tokens_revoke(args: argparse.Namespace) -> None:
 
 
 def cmd_me(_args: argparse.Namespace) -> None:
-    api_origin, token, _ = _authed_ctx()
-    emit(trpc_query({"apiOrigin": api_origin, "token": token}, "user.getMe"))
+    api_origin, token, creds = _authed_ctx()
+    me = trpc_query({"apiOrigin": api_origin, "token": token}, "user.getMe")
+    emit(me)
+    if isinstance(me, dict) and me.get("id"):
+        note(f"🔗 {user_url(creds['webOrigin'], me['id'])}")
 
 
 def cmd_channels_list(args: argparse.Namespace) -> None:
@@ -234,8 +238,9 @@ def cmd_channels_list(args: argparse.Namespace) -> None:
 
 
 def cmd_channels_get(args: argparse.Namespace) -> None:
-    api_origin, token, _ = _authed_ctx()
+    api_origin, token, creds = _authed_ctx()
     emit(trpc_query({"apiOrigin": api_origin, "token": token}, "channel.getById", {"id": args.id}))
+    note(f"🔗 {channel_url(creds['webOrigin'], args.id)}")
 
 
 def cmd_channels_create(args: argparse.Namespace) -> None:
@@ -338,8 +343,9 @@ def cmd_grains_list(args: argparse.Namespace) -> None:
 
 
 def cmd_grains_get(args: argparse.Namespace) -> None:
-    api_origin, token, _ = _authed_ctx()
+    api_origin, token, creds = _authed_ctx()
     emit(trpc_query({"apiOrigin": api_origin, "token": token}, "grain.getById", {"id": args.id}))
+    note(f"🔗 {post_url(creds['webOrigin'], args.id)}")
 
 
 def cmd_grains_search(args: argparse.Namespace) -> None:

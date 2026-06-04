@@ -98,8 +98,17 @@ echo '{...}' | neodrop api channel.create --stdin --mutation
 - **创建频道前先 `channels list --mine`** 看自己有没有同主题频道，再 `channels search`
   看公开池里有没有同名频道，避免重复创建。
 - **订阅前先 `channels get <id>`** 看频道详情（locale / 是否私有 / 主题），避免盲订。
-- 用户给的是 Neodrop URL（如 `neodrop.ai/channel/xxx`），从 URL path 抽 channelId
-  / grainId，再调对应 `channels get` / `grains get`。
+- 用户给的是 Neodrop URL，按下面三条前端路由约定从 path 抽 id 后调对应详情命令：
+
+  | URL | id 含义 | 调用 |
+  |---|---|---|
+  | `neodrop.ai/feed/<id>` | grain / post id | `grains get <id>` |
+  | `neodrop.ai/channel/<id>` | channelId | `channels get <id>` |
+  | `neodrop.ai/user/<id>` | userId | （无专用命令，按需用 `api user.getById --json`） |
+
+  反向也成立：拿到 id 想给用户一条可点击链接时，**不要凭记忆拼**——`grains get`
+  / `channels get` / `me` 已经会在 stderr 上打印一行 `🔗 <canonical-url>`，直接
+  把那条引用给用户。不要拼 `/grain/<id>`（前端没这个路由）或猜其它路径。
 - 命令失败时**先看 stderr 上的错误码**：`[UNAUTHORIZED]` 提示重 login；`[NOT_FOUND]`
   说明 id 或 slug 不对；`[BAD_REQUEST]` 通常是 input schema 不对（用 `--json` 时常见）。
 - **复杂 mutation 用 `--json` 或 `--stdin`**——糖衣 flag 覆盖不全时退到 raw JSON：
