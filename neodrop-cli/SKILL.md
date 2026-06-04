@@ -132,67 +132,15 @@ neodrop tasks watch <taskId>       # 阻塞轮询直到 COMPLETED / FAILED（默
 判断标准用 "已产出数 > 0" 比 `status == COMPLETED` 更早——后端的 task 终态比首篇内容出现要
 晚 1-3 分钟，前者一翻越 0 就意味着"频道已经在产内容了"。
 
-### 频道激活后：引导用户开本地定时拉取（重要）
+### 频道激活后：建议设个本地定时拉取
 
-**确认频道已激活、首篇产出后**（已产出数 ≥ 1），不要止步于"创建完成"——**主动提议帮用户
-在本机注册一个定时任务，到点自动拉取频道最新内容并整理给他看**。Neodrop 本身的推送
-是站内 + 邮件，AI 用户场景下，让 Claude Code / Codex 这类本地 agent 在用户机器上定时
-回来取，体验更连贯。
+频道跑起来后，主动建议用户「让我用当前 agent 的定时能力，到点自己回来拉新内容给你看」。
+两种情况一句话决策：
 
-按频道排期分两条路径：
+- 频道有 `schedule`（cron）：本地定时设到「生产时间 + 10 分钟」即可
+- 频道无 schedule（事件驱动 / 手动）：问一句「多久回来看一次？默认 30 分钟」
 
-#### A. 定时生产频道（最常见）
-
-频道有固定 cron schedule（每天某点 / 每周某天某点 / 每月某日等）。调 `channels get
-<channelId>` 拿到：
-
-- `channel.schedule` —— cron 字符串，例：`"0 8 * * *"`
-- `channel.timeZoneOffset` —— 整数小时偏移，例：`8`（= 东八区）
-
-**建议本地定时时间 = 频道生产时间 + 10 分钟**（给生产链路留缓冲）。
-
-引导话术（示例）：
-
-> "频道已经在跑了——首篇刚出来。它每天东八区 08:00 出新内容。
-> 要不要我帮你设一个本地定时任务，**每天 08:10 自动拉新内容，整理摘要给你**？"
-
-用户同意 → 用**当前 agent 自带的定时任务能力**注册一个 routine：
-
-- Claude Code：用 `/schedule` 创建（或 `Skill(schedule)` / `CronCreate` 工具，看可用项）
-- 其它本地 agent：同理用其原生的 cron / scheduled task 能力
-
-定时任务里要跑的命令是固定的：
-
-```bash
-./skills/neodrop-cli/bin/neodrop posts list --channel <channelId> --limit 5
-# 或拉全部订阅
-./skills/neodrop-cli/bin/neodrop posts list --subscribed --limit 10
-```
-
-让定时任务把输出回灌给 agent，由 agent 决定怎么呈现给用户（摘要 / 完整 / 只挑重点）。
-
-#### B. 不定时 / 事件驱动频道
-
-频道 `schedule` 为 `null` 或 `requirement.public.schedule.frequency` 是 `manual` /
-`event_driven`（如"信源有新内容才产"、"用户手动触发"），没有固定生产时间。
-
-**直接问用户希望多久拉一次**——默认建议 30 分钟一次，重要话题可以缩到 15 分钟，不急的
-可以放到 2 小时。引导话术（示例）：
-
-> "这个频道生产时间不固定（信源出新内容才会触发）。我每隔多久回来给你看一眼？
-> 默认 30 分钟一次，重要的可以缩到 15 分钟。"
-
-同样落地到本地 routine。**不要默认就给设**——这种频道频繁拉取容易扰民，确认用户意愿
-再注册。
-
-#### 公共要点
-
-- 把 channelId / 拉取间隔 / 时区**写进定时任务的命令行参数或描述里**，方便用户后续看
-  scheduled list 时能看懂这条 routine 是为哪个频道设的
-- 注册成功后告诉用户："已经设好了，每天/每 N 分钟我会回来；如果想停掉，跟我说'取消
-  XX 频道的定时拉取'即可"
-- 用户后续要改 / 删时，按 agent 的 schedule 管理能力执行（Claude Code: `/schedule
-  list` / `/schedule delete`）
+具体怎么注册由调用方 agent 自己决定（`/schedule`、`CronCreate` 等），本 skill 不限定方式。
 
 ### `setup` 与 `create` 的区别（要记牢）
 
