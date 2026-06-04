@@ -85,12 +85,44 @@ def _load_input_from_flags(args: argparse.Namespace) -> Optional[Any]:
 # ---- 元命令 -----------------------------------------------------------
 
 
+def _is_headless_env() -> bool:
+    """探测当前是不是「拉不起浏览器」的环境。
+
+    判据（任一命中即视为 headless）：
+    - 非 macOS / 非 Windows 下 `DISPLAY` 与 `WAYLAND_DISPLAY` 都没设
+    - 在 SSH 远程会话里（`SSH_CONNECTION` 或 `SSH_TTY` 有值）且无 DISPLAY
+    - `NEODROP_HEADLESS=1` 显式声明
+
+    Mac / Windows 默认有 GUI 不判 headless（webbrowser stdlib 在这两个平台
+    几乎总能找到默认浏览器）。
+    """
+    if os.environ.get("NEODROP_HEADLESS") == "1":
+        return True
+    if sys.platform in ("darwin", "win32"):
+        return False
+    has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    in_ssh = bool(os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"))
+    return (not has_display) or in_ssh
+
+
 def cmd_login(args: argparse.Namespace) -> None:
+    # --import 走完全不同的路径：从 stdin 读凭证 JSON、远端校验、落地
+    if getattr(args, "import_creds", False):
+        _cmd_login_import(args)
+        return
+
     web_origin: str = args.server
     # --api 显式 > NEODROP_API env > 启发式推断
     api_origin: str = args.api or ENV_API_OVERRIDE or infer_api_origin(web_origin)
     name: str = args.name
     port: int = args.port
+
+    # 决策：是否尝试拉浏览器
+    # - 显式 --no-browser → 不拉
+    # - 否则 headless 自动探测 → 不拉 + 提示
+    # - 其它情况 → 拉
+    headless = _is_headless_env()
+    open_browser = not args.no_browser and not headless
 
     state = generate_state()
     handle = start_callback_server(expected_state=state, port=port)
@@ -108,9 +140,22 @@ def cmd_login(args: argparse.Namespace) -> None:
     note(f"web   = {web_origin}")
     note(f"api   = {api_origin}")
     note(f"监听   {handle.url}")
-    note(f"授权 URL：{auth_url}")
-    note("如果浏览器没自动打开，复制上面 URL 手动访问。")
-    open_in_browser(auth_url)
+    note("")
+    note("👉 在任意能上网的浏览器打开下面 URL 授权：")
+    note(f"   {auth_url}")
+    note("")
+
+    if open_browser:
+        opened = open_in_browser(auth_url)
+        if not opened:
+            note("⚠ 无法自动拉起浏览器——请手动复制上面的 URL 打开。")
+    elif args.no_browser:
+        note("（--no-browser：不尝试拉起浏览器，等你手动打开 URL 完成授权）")
+    else:
+        note("（检测到 headless 环境：没启浏览器。等你手动打开上面 URL 完成授权；")
+        note("  如果你这台机器和浏览器在不同网络，loopback callback 不可达，请改用 `login --import`，详见 references/auth.md）")
+
+    note(f"等待授权回调（最长 10 分钟）...")
 
     try:
         result = handle.await_result(timeout_seconds=600)
@@ -159,6 +204,60 @@ def _url_encode(s: str) -> str:
     from urllib.parse import quote
 
     return quote(s, safe="")
+
+
+def _cmd_login_import(_args: argparse.Namespace) -> None:
+    """从 stdin 读凭证 JSON，远端校验通过后落地——用于无浏览器的远程 / 沙箱 agent。
+
+    用法：
+        cat ~/.neodrop/credentials.json | ./bin/neodrop login --import
+        ssh agent './bin/neodrop login --import' < ~/.neodrop/credentials.json
+    """
+    if sys.stdin.isatty():
+        raise RuntimeError(
+            "--import 需要从 stdin 读凭证 JSON；请用管道或重定向：\n"
+            "  cat creds.json | ./bin/neodrop login --import"
+        )
+    raw = sys.stdin.read().strip()
+    if not raw:
+        raise RuntimeError("--import: stdin 是空的，没读到凭证 JSON")
+    try:
+        creds = json.loads(raw)
+    except json.JSONDecodeError as err:
+        raise RuntimeError(f"--import: stdin 不是合法 JSON：{err}") from err
+
+    required = {"webOrigin", "apiOrigin", "token", "tokenId", "name", "expiresAt"}
+    missing = required - set(creds)
+    if missing:
+        raise RuntimeError(f"--import: 凭证 JSON 缺字段 {sorted(missing)}")
+
+    # 远端校验：用导入的 token 调一次 user.getMe，确认 token 有效
+    note(f"web   = {creds['webOrigin']}")
+    note(f"api   = {creds['apiOrigin']}")
+    note("校验导入的 token…")
+    try:
+        me = trpc_query({"apiOrigin": creds["apiOrigin"], "token": creds["token"]}, "user.getMe")
+    except ApiError as err:
+        raise RuntimeError(f"--import: token 校验失败（{err}）；该凭证可能已过期或被撤销") from err
+
+    # createdAt 缺失补当前时间（兼容老版本凭证）
+    if "createdAt" not in creds:
+        creds["createdAt"] = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    write_credentials(creds)
+    note(f"✅ 导入成功：{me.get('email') or me.get('id') or '<unknown>'}")
+    note(f"   credentials = {credentials_path()}")
+    emit(
+        {
+            "ok": True,
+            "imported": True,
+            "webOrigin": creds["webOrigin"],
+            "apiOrigin": creds["apiOrigin"],
+            "user": me,
+            "tokenId": creds["tokenId"],
+            "tokenName": creds["name"],
+            "expiresAt": creds["expiresAt"],
+        }
+    )
 
 
 def cmd_logout(_args: argparse.Namespace) -> None:
@@ -412,6 +511,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--name", default=_detect_client_name(), help="客户端名（授权页显示给用户辨认）")
     p.add_argument("--port", type=int, default=0, help="本地 callback server 端口（0=随机）")
+    p.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="不尝试拉起浏览器，只打印 URL；适合 SSH / 无 DISPLAY 环境，等用户在另一个浏览器里手动打开",
+    )
+    p.add_argument(
+        "--import",
+        dest="import_creds",
+        action="store_true",
+        help="从 stdin 读凭证 JSON 并校验落地（适合云沙箱 / 无浏览器机器，从另一台已登录机器把 ~/.neodrop/credentials.json 搬过来）",
+    )
     p.set_defaults(func=cmd_login)
 
     add(sub, "logout", help="撤销 PAT + 删本地凭证").set_defaults(func=cmd_logout)

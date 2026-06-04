@@ -68,5 +68,5 @@ def clear_credentials() -> None:
 def require_credentials() -> Credentials:
     creds = read_credentials()
     if creds is None:
-        raise RuntimeError("未登录。先运行：./skills/neodrop-cli/bin/neodrop login")
+        raise RuntimeError("未登录。先运行：./bin/neodrop login（或参见 SKILL.md 路径约定）")
     return creds
