@@ -62,7 +62,12 @@ git submodule add https://github.com/DeepLangAI/neodrop-skills.git neodrop-skill
 ./skills/neodrop-cli/bin/neodrop login
 ```
 
-浏览器会自动跳到授权页 → 点「同意」→ 关浏览器即完成。token 写入 `~/.neodrop/credentials.json`（chmod 0600，只有你能读）。
+CLI 会打印一条 `https://neodrop.ai/cli-auth?session=...` URL。复制到**任意**浏览器
+（本机 / 手机 / 另一台机器都行）打开 → 登录 + 在授权页确认「客户端名」+ 点同意。
+CLI 自动检测到（轮询）→ 写凭证到 `~/.neodrop/credentials.json`（chmod 0600）。
+
+不会自动拉起浏览器、不开本地端口——SSH / 云沙箱 / 容器同样适用。详细流程见
+[`skills/neodrop-cli/references/auth.md`](skills/neodrop-cli/references/auth.md)。
 
 验证：
 
@@ -115,7 +120,7 @@ Grain        grains list [--subscribed | --channel <id>] / get <id> / search <q>
 全局         --pretty（缩进 JSON 给人看，但依然是合法 JSON）
 ```
 
-详细用法：`./skills/neodrop-cli/bin/neodrop --help` 或看 [`neodrop-cli/SKILL.md`](neodrop-cli/SKILL.md)。
+详细用法：`./skills/neodrop-cli/bin/neodrop --help` 或看 [`skills/neodrop-cli/SKILL.md`](skills/neodrop-cli/SKILL.md)。
 
 ## 输出契约
 
