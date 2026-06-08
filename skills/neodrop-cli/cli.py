@@ -131,10 +131,7 @@ def cmd_login(args: argparse.Namespace) -> None:
     # 顶格单独一行最便于「三击选整行 / 鼠标拖整行」一次性把完整 URL 复制走。
     note(verification_url)
     note("")
-    note("⚠️ 复制时务必带上结尾的 ?session=... 整段——这条 URL 很长、终端会折行，")
-    note("   只复制到前半段（如 .../cli-auth）再打开，授权页会报「授权请求不合法 /")
-    note("   缺少有效的 session 参数」。粘贴后确认浏览器地址栏里有 ?session=cas_ 再回车。")
-    note("")
+    note("   （URL 较长会折行，复制时连同结尾的 ?session=... 一起选全）")
     note(f"   客户端名「{client_name}」（在授权页确认是本次启动的 CLI）")
     note("   授权链接 10 分钟内有效。授权后回到这个终端继续——CLI 会自动检测。")
     note("")
