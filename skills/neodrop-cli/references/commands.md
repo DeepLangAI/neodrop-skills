@@ -1,6 +1,6 @@
 # neodrop-cli 命令清单
 
-> 调用约定：用 `./bin/neodrop <command>`（参见 [SKILL.md 路径约定](../SKILL.md#路径约定)）。
+> 调用约定：用 `npx neodrop <command>`（参见 [SKILL.md 调用方式](../SKILL.md#调用方式)）。
 > 下面示例直接写 `neodrop <command>`。
 
 ## identity

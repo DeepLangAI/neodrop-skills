@@ -1,0 +1,44 @@
+name: Publish neodrop-cli to npm
+
+# 发布通过打 git tag 触发（如 git tag v1.0.1 && git push origin v1.0.1）。
+# 鉴权走 npm OIDC「可信发布」(Trusted Publishing)——CI 无需任何长期 npm token。
+#
+# 一次性前置（在 npmjs.com 上做，首版手动 npm publish 后才能配）：
+#   包页 → Settings → Trusted Publishers → 添加 GitHub Actions：
+#     Repository    = DeepLangAI/neodrop-skills
+#     Workflow file = publish.yml
+#     allowed action 勾选 publish（2026-05-20 之后建的配置必须显式勾）
+# 注意：OIDC 无法发布「首个版本」，第一版需本地 npm login + npm publish 手动发一次。
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # OIDC：让 GitHub Actions 能签发短期 id-token 供 npm 校验
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: skills/neodrop-cli
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # 可信发布需要 npm >= 11.5.1；setup-node 自带的 npm 可能更旧，强制升一下。
+      - name: Ensure npm supports trusted publishing
+        run: npm install -g npm@latest
+
+      # 无 NODE_AUTH_TOKEN：npm CLI 检测到 OIDC 环境 + 已配可信发布者即自动鉴权，
+      # 并默认带上 provenance 溯源签名。
+      - name: Publish
+        run: npm publish --access public

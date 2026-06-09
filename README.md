@@ -15,9 +15,10 @@ neodrop-skills/
 └── skills/                ← 所有 skill 在这里并列
     └── neodrop-cli/       ← 第一个 skill（将来可有 neodrop-pm/、neodrop-search/ 等）
         ├── SKILL.md       ← AI agent skill 描述 + 路由触发词
-        ├── cli.py         ← Python 入口（stdlib only）
-        ├── lib/           ← api / credentials / callback_server / ...
-        └── bin/neodrop    ← bash 包装 → python3 cli.py
+        ├── package.json   ← npm 包（发布为 neodrop-cli，bin: neodrop）
+        ├── bin/neodrop.mjs ← Node 入口（#!/usr/bin/env node）
+        ├── lib/           ← api / credentials / origins / output / web-urls / install-skill
+        └── references/    ← 命令清单 / 鉴权 / 故障排查 / URL 路由
 ```
 
 ## 装这个 skill 能让 AI 做什么
@@ -35,31 +36,16 @@ neodrop-skills/
 
 | 要求 | 说明 |
 |---|---|
-| **Python 3.9+** | macOS 12+ 自带；Linux 一般有；Windows 装 [python.org](https://www.python.org/) 官方版 |
+| **Node 18+** | `node --version` 自查；自带 `npx`。没有的话去 [nodejs.org](https://nodejs.org/) 装 LTS |
 | **一个 Neodrop 账号** | 没注册的话先去 https://neodrop.ai 注册 |
 | **一个 AI agent** | Claude Code / Cursor / Codex / 任何能跑 shell 的 agent |
 
-> 不需要 Node、Bun、npm、pip——零额外依赖，全部 Python 标准库实现。
+> CLI 用 Node 原生 fetch 实现，零运行时依赖——`npx neodrop` 即用，不需要 clone 仓库、不需要 pip / Python。
 
-### 2. Clone 仓库
-
-挑一个你愿意放代码的目录，把仓库 clone 下来：
+### 2. 登录（一次）
 
 ```bash
-git clone https://github.com/DeepLangAI/neodrop-skills.git
-cd neodrop-skills
-```
-
-或者把它作为某个项目的 git submodule：
-
-```bash
-git submodule add https://github.com/DeepLangAI/neodrop-skills.git neodrop-skills
-```
-
-### 3. 登录（一次）
-
-```bash
-./skills/neodrop-cli/bin/neodrop login
+npx neodrop login
 ```
 
 CLI 会打印一条 `https://neodrop.ai/cli-auth?session=...` URL。复制到**任意**浏览器
@@ -72,45 +58,45 @@ CLI 自动检测到（轮询）→ 写凭证到 `~/.neodrop/credentials.json`（
 验证：
 
 ```bash
-./skills/neodrop-cli/bin/neodrop whoami --pretty
+npx neodrop whoami --pretty
 ```
 
 应该看到你的用户信息和 token 元信息的 JSON。
 
-### 4. 接入 AI agent
+### 3. 接入 AI agent
 
 #### Claude Code
 
-把整个 skill 目录软链到 Claude Code 的 skill 目录（**链整个目录而不是只链 SKILL.md**——这样 `bin/`、`cli.py` 等也一并就位，Claude Code 才能跑命令）。目录名必须与 `SKILL.md` 的 `name: neodrop-cli` 一致：
+一条命令把 skill 描述装进 Claude Code 的 skill 目录：
 
 ```bash
-ln -sf "$PWD/skills/neodrop-cli" ~/.claude/skills/neodrop-cli
+npx neodrop install-skill
 ```
 
-重启 Claude Code（或新开一个会话），AI 看到「我订阅了什么频道」之类的提问就会自动调本 skill。
+它会把 `SKILL.md` + `references/` 拷到 `~/.claude/skills/neodrop-cli/`。重启 Claude Code
+（或新开一个会话），AI 看到「我订阅了什么频道」之类的提问就会自动调本 skill（调用 `npx neodrop ...`）。
 
-可选——把 `bin/neodrop` 加进 Claude Code 的 Bash allowlist（避免每次确认权限），编辑 `~/.claude/settings.json`：
+可选——把 `npx neodrop` 加进 Claude Code 的 Bash allowlist（避免每次确认权限），编辑 `~/.claude/settings.json`：
 
 ```json
 {
   "permissions": {
-    "allow": ["Bash(./skills/neodrop-cli/bin/neodrop:*)"]
+    "allow": ["Bash(npx neodrop:*)"]
   }
 }
 ```
 
-#### Cursor
+> 嫌每次 `npx` 拉包慢，可以全局装一份：`npm i -g neodrop-cli`，之后直接 `neodrop <command>`，allowlist 写 `Bash(neodrop:*)`。
 
-把 SKILL.md 内容复制到 `.cursorrules` 或 Cursor 设置里的 system prompt 末尾，告诉 Cursor「需要操作 Neodrop 时调 `./skills/neodrop-cli/bin/neodrop ...`」。
+#### Cursor / 别的 agent
 
-#### 别的 agent
-
-只要 agent 能跑 shell 命令、能读 stdout，就能用——把 `SKILL.md` 内容贴到 agent 的 system prompt / instructions 里，agent 会按照 skill 里的命令清单调用。
+把 `SKILL.md` 内容复制到 Cursor 的 `.cursorrules` / system prompt（或任何 agent 的 instructions）末尾，
+告诉它「需要操作 Neodrop 时调 `npx neodrop ...`」。只要 agent 能跑 shell、能读 stdout 就能用。
 
 ## 命令速查
 
 ```
-元命令       login / logout / whoami / me
+元命令       login / logout / whoami / me / install-skill
 PAT 管理     tokens list / tokens revoke <id>
 频道         channels list [--mine] / get <id> / create / subscribe <id> / unsubscribe <id>
              channels search <q> / categories / by-category <slug>
@@ -120,7 +106,7 @@ Grain        grains list [--subscribed | --channel <id>] / get <id> / search <q>
 全局         --pretty（缩进 JSON 给人看，但依然是合法 JSON）
 ```
 
-详细用法：`./skills/neodrop-cli/bin/neodrop --help` 或看 [`skills/neodrop-cli/SKILL.md`](skills/neodrop-cli/SKILL.md)。
+详细用法：`npx neodrop --help` 或看 [`skills/neodrop-cli/SKILL.md`](skills/neodrop-cli/SKILL.md)。
 
 ## 输出契约
 
@@ -128,7 +114,7 @@ CLI 给 AI 设计：
 
 | 通道 | 内容 |
 |---|---|
-| `stdout` | **永远是合法 JSON**，AI 直接 `json.loads` |
+| `stdout` | **永远是合法 JSON**，AI 直接 `JSON.parse` |
 | `stderr` | 日志、进度、错误描述（给人看） |
 | exit `0` | 成功 |
 | exit `1` | 业务错误（鉴权失败 / 找不到 / 后端 reject 参数等） |
@@ -141,7 +127,7 @@ CLI 给 AI 设计：
 - token 是明文存在 `~/.neodrop/credentials.json`，文件权限自动设为 `0600`（只有当前用户能读）
 - 同 GitHub PAT / npm token 一样，**请保护好你的 home 目录**——任何能读你 home 目录的进程都能拿到这个 token，等价于你的登录身份
 - 默认 token 90 天过期；可在 [neodrop.ai/settings/cli-tokens](https://neodrop.ai/settings/cli-tokens) 网页随时撤销
-- 本地丢 token：`./skills/neodrop-cli/bin/neodrop logout`（撤销 + 删本地凭证），然后 `login` 重发
+- 本地丢 token：`npx neodrop logout`（撤销 + 删本地凭证），然后 `login` 重发
 - 担心 token 在文件里裸奔：每次用完都 logout；或定期 `tokens list` 检查并撤销陌生条目
 
 ## 私有部署 / Self-host
@@ -150,13 +136,25 @@ CLI 给 AI 设计：
 
 ```bash
 # 方式 A：环境变量
-NEODROP_SERVER=https://your-neodrop.example.com ./skills/neodrop-cli/bin/neodrop login
+NEODROP_SERVER=https://your-neodrop.example.com npx neodrop login
 
 # 方式 B：login flag
-./skills/neodrop-cli/bin/neodrop login --server https://your-neodrop.example.com
+npx neodrop login --server https://your-neodrop.example.com
 ```
 
 默认 API 域按 web origin 启发式推断：`neodrop.ai` → `api.neodrop.ai`；`localhost:4001` → `localhost:3001`；其他默认与 web origin 同域（假设 backend 反代在 `/trpc/*`）。如果你的 api 域不同，传 `--api <url>` 或设 `NEODROP_API`。
+
+## 开发 / 发布
+
+CLI 源码在 [`skills/neodrop-cli/`](skills/neodrop-cli/)，纯 Node、零运行时依赖。本地跑：
+
+```bash
+cd skills/neodrop-cli
+node bin/neodrop.mjs --help
+```
+
+发布到 npm 由打 git tag 触发，走 OIDC 可信发布（CI 无长期 token），见
+[`.github/workflows/publish.yml`](.github/workflows/publish.yml)。
 
 ## 反馈与贡献
 

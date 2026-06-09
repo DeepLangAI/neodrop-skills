@@ -3,7 +3,7 @@
 ## 唯一登录流程：session polling
 
 ```bash
-./bin/neodrop login
+npx neodrop login
 ```
 
 无 flag、无模式分支。CLI 做这些事：
@@ -74,10 +74,10 @@ ssh agent-box 'chmod 600 ~/.neodrop/credentials.json && neodrop whoami'
 
 ```bash
 # 方式 A：环境变量
-NEODROP_SERVER=https://your-neodrop.example.com ./bin/neodrop login
+NEODROP_SERVER=https://your-neodrop.example.com npx neodrop login
 
 # 方式 B：login flag
-./bin/neodrop login --server https://your-neodrop.example.com
+npx neodrop login --server https://your-neodrop.example.com
 ```
 
 默认 API 域按 web origin 启发式推断（`neodrop.ai` → `api.neodrop.ai`；`localhost:4001`
@@ -86,8 +86,8 @@ NEODROP_SERVER=https://your-neodrop.example.com ./bin/neodrop login
 
 ## 撤销与轮换
 
-- 本地 logout：`./bin/neodrop logout`（远程撤销 + 清本地凭证）
+- 本地 logout：`npx neodrop logout`（远程撤销 + 清本地凭证）
 - 网页撤销：[neodrop.ai/settings/cli-tokens](https://neodrop.ai/settings/cli-tokens)
-- 看自己签发了哪些 PAT：`./bin/neodrop tokens list`
-- 撤销别处的 PAT：`./bin/neodrop tokens revoke <id>`
+- 看自己签发了哪些 PAT：`npx neodrop tokens list`
+- 撤销别处的 PAT：`npx neodrop tokens revoke <id>`
 - 默认 PAT 有效期 90 天；过期重新 `login` 即可

@@ -1,0 +1,36 @@
+{
+  "name": "neodrop-cli",
+  "version": "1.0.0",
+  "description": "Neodrop（neodrop.ai）CLI — 让 AI agent（Claude Code / Cursor / Codex 等）以你的身份查频道、看 grain、订阅 feed、创建频道。stdout 永远是合法 JSON。npx neodrop login 即用。",
+  "type": "module",
+  "bin": {
+    "neodrop": "bin/neodrop.mjs"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "SKILL.md",
+    "references/"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "neodrop",
+    "cli",
+    "ai-agent",
+    "claude-code",
+    "skill",
+    "trpc"
+  ],
+  "homepage": "https://github.com/DeepLangAI/neodrop-skills/tree/main/skills/neodrop-cli",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DeepLangAI/neodrop-skills.git",
+    "directory": "skills/neodrop-cli"
+  },
+  "bugs": {
+    "url": "https://github.com/DeepLangAI/neodrop-skills/issues"
+  },
+  "license": "MIT"
+}
