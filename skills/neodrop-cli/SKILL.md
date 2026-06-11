@@ -4,7 +4,7 @@ version: 1.0.0
 tested_with:
   neodrop_api: "2026-06"
   node: ">=18"
-description: 在 Neodrop（neodrop.ai）平台上代当前用户查询和操作频道 / Grain 内容 / 个人 feed——创建频道、订阅 / 取消订阅、搜索公开频道与内容、看分类、查自己拥有的频道、读 grain 详情。**只要用户提到 Neodrop、neodrop.ai、「我的频道」、「订阅了什么」、「grain」「grains」（Neodrop 上的内容单元）、「创建一个频道」「订阅这个频道」「搜频道」「公开内容」「公开 feed」「订阅 feed」等任意关键词或场景，就用本 skill 调 `npx neodrop <command>`——不要走 fetch / curl / 自己写 HTTP，本 skill 已经处理好鉴权、JSON 序列化、错误码、locale 默认值等细节。**
+description: 在 Neodrop（neodrop.ai）平台上代当前用户查询和操作频道 / Post 内容 / 个人 feed——创建频道、订阅 / 取消订阅、搜索公开频道与内容、看分类、查自己拥有的频道、读 post 详情。**只要用户提到 Neodrop、neodrop.ai、「我的频道」、「订阅了什么」、「post」「posts」（Neodrop 上的内容单元，旧称 grain，用户说 grain / grains 一样指它）、「创建一个频道」、「订阅这个频道」、「搜频道」、「公开内容」、「公开 feed」、「订阅 feed」等任意关键词或场景，就用本 skill 调 `npx neodrop <command>`——不要走 fetch / curl / 自己写 HTTP，本 skill 已经处理好鉴权、JSON 序列化、错误码、locale 默认值等细节。**
 ---
 
 # neodrop-cli skill
@@ -34,7 +34,7 @@ CLI 以 npm 包 `neodrop-cli` 发布，下文命令统一写作 `neodrop <comman
 
 | 用 | 不用 |
 |---|---|
-| 用户问「我订阅了什么频道」「我的频道最近更新了什么」 | 用户问的内容是普通网页（不是 Neodrop 的频道 / grain） |
+| 用户问「我订阅了什么频道」「我的频道最近更新了什么」 | 用户问的内容是普通网页（不是 Neodrop 的频道 / post） |
 | 用户想看 / 创建 Neodrop 频道（"帮我建一个追踪 AI 行业的频道"） | 内容已经在对话里贴出来了，不需要再调 API |
 | 用户分享 Neodrop 链接、想看详情 | 调试/分析 Neodrop 后端本身（用 `lark-cli` 等运维工具） |
 | 用户问公开池里有没有某主题频道 | 一次性创建很多对象（CLI 单次调用，循环调用前先想想） |
@@ -64,7 +64,7 @@ CLI 自动检测到（轮询）→ 写凭证到 `~/.neodrop/credentials.json` ch
 |---|---|---|
 | 看当前用户 / token | `me` / `whoami` / `tokens list` | [`references/commands.md#identity`](references/commands.md#identity) |
 | 看 / 搜 / 建 / 订阅频道 | `channels list/get/search/create/subscribe/unsubscribe`, `channels categories`, `channels by-category` | [`references/commands.md#channels`](references/commands.md#channels) |
-| 看 / 搜 grain 内容 | `grains list/get/search`, `feed` | [`references/commands.md#grains`](references/commands.md#grains) |
+| 看 / 搜 post 内容 | `posts list/get/search`, `feed` | [`references/commands.md#posts`](references/commands.md#posts) |
 | 没糖衣命令的 procedure | `api <procedure> [--json '...' \| --stdin] [--mutation]` | [`references/commands.md#api`](references/commands.md#api) |
 | 用户贴了 Neodrop URL 想看详情 | 按 URL → id 映射调对应 `get` 命令 | [`references/url-routing.md`](references/url-routing.md) |
 | 失败 / 报错 | 看 stderr 错误码 | [`references/troubleshooting.md`](references/troubleshooting.md) |
@@ -73,7 +73,7 @@ CLI 自动检测到（轮询）→ 写凭证到 `~/.neodrop/credentials.json` ch
 
 - **创建频道前先去重**：`channels list --mine` 看自己有没有同主题，再 `channels search` 看公开池有没有同名，避免重复创建。
 - **订阅前先 `channels get <id>`** 看 locale / 是否私有 / 主题，避免盲订。
-- **给用户回链接不要凭记忆拼**——`grains get` / `channels get` / `me` 已经会在 stderr 打印 `🔗 <canonical-url>`，直接用那条。
+- **给用户回链接不要凭记忆拼**——`posts get` / `channels get` / `me` 已经会在 stderr 打印 `🔗 <canonical-url>`，直接用那条。
 - **`api` 默认是 GET query**，写操作必须显式加 `--mutation`，否则后端会拒。
 
 ## 环境变量

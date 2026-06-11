@@ -392,9 +392,10 @@ async function cmdChannelsByCategory(argv) {
   emit(await trpcQuery({ apiOrigin, token }, "channel.listByCategory", payload));
 }
 
-// ---- grain 命令 -------------------------------------------------------
+// ---- post 命令 --------------------------------------------------------
+// 命令面向用户的术语统一为 post；tRPC procedure 名仍是后端契约 `grain.*`，不动。
 
-async function cmdGrainsList(argv) {
+async function cmdPostsList(argv) {
   const { values } = parse(argv, {
     channel: { type: "string" },
     subscribed: { type: "boolean" },
@@ -424,21 +425,21 @@ async function cmdGrainsList(argv) {
   emit(await trpcQuery({ apiOrigin, token }, "grain.listRecent", payload));
 }
 
-async function cmdGrainsGet(argv) {
+async function cmdPostsGet(argv) {
   const { positionals } = parse(argv, {});
-  const id = requirePositional(positionals, 0, "用法：neodrop grains get <grainId>");
+  const id = requirePositional(positionals, 0, "用法：neodrop posts get <postId>");
   const { apiOrigin, token, creds } = authedCtx();
   emit(await trpcQuery({ apiOrigin, token }, "grain.getById", { id }));
   note(`🔗 ${postUrl(creds.webOrigin, id)}`);
 }
 
-async function cmdGrainsSearch(argv) {
+async function cmdPostsSearch(argv) {
   const { values, positionals } = parse(argv, {
     limit: { type: "string" },
     locale: { type: "string" },
     strict: { type: "boolean" },
   });
-  const query = requirePositional(positionals, 0, '用法：neodrop grains search "<query>"');
+  const query = requirePositional(positionals, 0, '用法：neodrop posts search "<query>"');
   const { apiOrigin, token } = authedCtx();
   const payload = { query };
   const limit = toLimit(values.limit);
@@ -521,11 +522,11 @@ const HELP = `neodrop — Neodrop CLI（AI agent 与人类共用，stdout = JSON
   channels categories
   channels by-category <slug> [--limit N] [--cursor C] [--locale L] [--sort latest|popular]
 
-grain：
-  grains list [--subscribed | --channel <id>] [--limit N] [--cursor C] [--locale L]
-  grains get <grainId>
-  grains search "<query>" [--limit N] [--locale L] [--strict]
-  feed [--limit N] [--cursor C]                        = grains list --subscribed
+内容（Post）：
+  posts list [--subscribed | --channel <id>] [--limit N] [--cursor C] [--locale L]
+  posts get <postId>
+  posts search "<query>" [--limit N] [--locale L] [--strict]
+  feed [--limit N] [--cursor C]                        = posts list --subscribed
 
 兜底：
   api <procedure> [--json '...' | --stdin] [--mutation]
@@ -552,10 +553,10 @@ const CHANNELS_SUB = {
   categories: cmdChannelsCategories,
   "by-category": cmdChannelsByCategory,
 };
-const GRAINS_SUB = {
-  list: cmdGrainsList,
-  get: cmdGrainsGet,
-  search: cmdGrainsSearch,
+const POSTS_SUB = {
+  list: cmdPostsList,
+  get: cmdPostsGet,
+  search: cmdPostsSearch,
 };
 
 async function dispatchGroup(name, table, argv) {
@@ -596,8 +597,9 @@ async function dispatch(rawArgs) {
       return dispatchGroup("tokens", TOKENS_SUB, rest);
     case "channels":
       return dispatchGroup("channels", CHANNELS_SUB, rest);
-    case "grains":
-      return dispatchGroup("grains", GRAINS_SUB, rest);
+    case "grains": // 向后兼容：旧命令名，已更名为 posts
+    case "posts":
+      return dispatchGroup("posts", POSTS_SUB, rest);
     case "feed":
       return cmdFeed(rest);
     case "api":
