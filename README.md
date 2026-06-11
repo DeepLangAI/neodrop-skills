@@ -1,6 +1,6 @@
 # Neodrop Skills
 
-让你的 AI agent（Claude Code、Cursor、Codex 等）以你的身份操作 [Neodrop](https://neodrop.ai)——查频道、看 grain、订阅 feed、创建频道，不需要离开你的编辑器。
+让你的 AI agent（Claude Code、Cursor、Codex 等）以你的身份操作 [Neodrop](https://neodrop.ai)——查频道、看 post、订阅 feed、创建频道，不需要离开你的编辑器。
 
 本仓库收录所有官方 Neodrop AI skill。当前只有 `neodrop-cli`，将来会有更多。
 
@@ -100,8 +100,8 @@ npx neodrop install-skill
 PAT 管理     tokens list / tokens revoke <id>
 频道         channels list [--mine] / get <id> / create / subscribe <id> / unsubscribe <id>
              channels search <q> / categories / by-category <slug>
-Grain        grains list [--subscribed | --channel <id>] / get <id> / search <q>
-             feed（= grains list --subscribed）
+Post         posts list [--subscribed | --channel <id>] / get <id> / search <q>
+             feed（= posts list --subscribed）
 兜底         api <procedure> [--json '...' | --stdin] [--mutation]
 全局         --pretty（缩进 JSON 给人看，但依然是合法 JSON）
 ```

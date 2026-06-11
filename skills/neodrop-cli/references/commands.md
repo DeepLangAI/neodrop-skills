@@ -37,16 +37,18 @@ neodrop channels unsubscribe <channelId>
 
 **默认 locale**：`channels list`、`channels search`、`channels by-category` 若不传 `--locale`，按当前用户登录 locale 走（后端默认）。需要跨 locale 查公开池时显式传 `--locale en` 等。
 
-## grains
+## posts
+
+> 内容单元在 Neodrop 上叫 **post**。旧命令名 `grains` 仍作为向后兼容别名保留，新代码统一用 `posts`。
 
 ```bash
-neodrop grains list --limit 10                     # 公开 feed
-neodrop grains list --subscribed --limit 10        # 我订阅的（= neodrop feed --limit 10）
-neodrop grains list --channel <channelId> --limit 10
-neodrop grains get <grainId>
-neodrop grains search "Apple Intelligence" --limit 10
+neodrop posts list --limit 10                      # 公开 feed
+neodrop posts list --subscribed --limit 10         # 我订阅的（= neodrop feed --limit 10）
+neodrop posts list --channel <channelId> --limit 10
+neodrop posts get <postId>
+neodrop posts search "Apple Intelligence" --limit 10
 
-neodrop feed --limit 10                            # 等价 grains list --subscribed
+neodrop feed --limit 10                            # 等价 posts list --subscribed
 ```
 
 ## api

@@ -1,7 +1,7 @@
 {
   "name": "neodrop-cli",
-  "version": "1.0.0",
-  "description": "Neodrop（neodrop.ai）CLI — 让 AI agent（Claude Code / Cursor / Codex 等）以你的身份查频道、看 grain、订阅 feed、创建频道。stdout 永远是合法 JSON。npx neodrop login 即用。",
+  "version": "1.1.0",
+  "description": "Neodrop（neodrop.ai）CLI — 让 AI agent（Claude Code / Cursor / Codex 等）以你的身份查频道、看 post、订阅 feed、创建频道。stdout 永远是合法 JSON。npx neodrop login 即用。",
   "type": "module",
   "bin": {
     "neodrop": "bin/neodrop.mjs"
